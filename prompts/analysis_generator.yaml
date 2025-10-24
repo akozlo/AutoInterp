@@ -1,0 +1,58 @@
+# Analysis Generator Prompts
+
+# System message for code generation
+system_message: |
+  You are an expert Python programmer for AI interpretability research. 
+  Generate clean, efficient, and well-documented code. 
+  Your response MUST contain ONLY executable code with no introduction, explanation, or concluding text outside of code comments. 
+  Do not prefix your response with phrases like 'Here's the code' or explain what the code does outside of code comments.
+  All output should be printed to stdout. But do not print excessive outputs, it is important not to overload the LLM's context window.
+
+# Base prompt for all analysis generation requests - now using raw text format!
+base_template: |
+  # Analysis Specification:
+  
+  {question_text}
+  
+  Model: {model_name}
+  Model Path: {model_path}
+  
+  {analysis_plan}
+  
+  Write a Python script to investigate this question using transformer-lens, a library for interpreting transformer language models. Implement the analysis exactly according to the ANALYSIS PLAN above.
+  
+  IMPORTANT: Your response MUST be ONLY executable Python code with no surrounding text or explanations. 
+  Do not prefix your response with phrases like "Here's a Python script..." or "This code will...".
+  Any explanations or notes must be included as comments within the code.
+  
+  The script should:
+  
+  1. Use transformer_lens to load and analyze the model
+  2. Be well-documented with clear comments, both in the code and alongside printed output
+  3. PRINT the results to stdout - do not save them as a variable - the system captures all printed output
+  4. Don't do any visualizations - just print the results to stdout. The stdout will be read by a text-based LLM, so do not print excessive outputs.
+  5. If your script generates any data files (such as a list of prompts), save them to the data directory: {project_dir}/data/
+  
+# Template for including previous insights
+insights_template: |
+  # Previous findings and insights to consider in this analysis:
+  {previous_insights}
+
+# Template for retry attempts
+retry_template: |
+  
+  This previous attempt failed. Please rewrite the script, fixing the errors, but attempting the same analyses. Stay as close to the intended analysis as possible.
+  
+  ###### FAILED SCRIPT########
+  {failed_script}
+  ########################
+  ERROR MESSAGE: {error_message}
+  {error_traceback}
+  
+  # Please make sure to fix this (and any other errors) in your next version of the script.  
+
+# Instructions for avoiding errors in retries
+retry_instructions: |
+  REVISION INSTRUCTIONS:
+  1. Remember to print the results to stdout, not save them as a variable. It is helpful if you print annotation with your outputs so they are easy to interpret.
+  2. Make sure output has a clear structure and is easy to interpret and does not overwhelm the LLM's context window.

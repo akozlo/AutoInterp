@@ -1,0 +1,60 @@
+#### THESE ARE REFERENCE NOTES FOR USING THE TRANSFORMER LENS LIBRARY ####
+
+import torch
+from transformer_lens import HookedTransformer
+import torch.nn.functional as F
+
+device = ("cuda" if torch.cuda.is_available()
+    else "cpu"
+)
+
+device = torch.device(device)
+model_list = ["gpt2-medium","gpt2-xl","Qwen/Qwen2.5-1.5B","Qwen/Qwen2.5-1.5B-Instruct","meta-llama/Llama-3.2-1B","meta-llama/Llama-3.2-1B-Instruct"]
+
+model = HookedTransformer.from_pretrained(model_list[0], device=device, fold_ln=False)
+
+'''
+Things to always remember:
+1.) There is a start-of-sequence token at the beginning of each prompt.
+2.) There may be padding at the end of a prompt if it is processed in a batch.
+3.) Tokens are usually preceded by spaces. This can be encoded in various different ways by the tokenizer. But when testing the probability of a token, it should probably be " good" or " bad", for example.
+4.) Get logits and activations like this: logits, cache = model.run_with_cache(prompt_list)
+'''
+
+'''
+Available activation tensors for layer n:
+hook_embed  == embedding layer
+hook_pos_embed  == position embedding layer
+blocks.n.hook_resid_pre  == resid_pre.std(dim=-1, keepdim=True, unbiased=False)
+blocks.n.ln1.hook_scale  == std of the residual stream before the attention layer
+blocks.n.ln1.hook_normalized  == normalized residual connection before the attention layer
+blocks.n.attn.hook_q  == query activation tensor
+blocks.n.attn.hook_k  == key activation tensor
+blocks.n.attn.hook_v  == value activation tensor
+blocks.n.attn.hook_attn_scores  == attention scores (before softmax) tensor
+blocks.n.attn.hook_pattern  == attention pattern (after softmax) tensor
+blocks.n.attn.hook_z  == product of attention pattern and value tensor
+blocks.n.hook_attn_out  == output of attention layer (attn.hook_z %% W_O)
+blocks.n.hook_resid_mid  == residual stream right before the MLP
+blocks.n.ln2.hook_scale  == resid_mid.std(dim=-1, keepdim=True, unbiased=False)
+blocks.n.ln2.hook_normalized  == normalized residual stream right before MLP
+blocks.n.mlp.hook_pre  == activations before non-linear activation in MLP
+blocks.n.mlp.hook_post  == activations after non-linear activation in MLP
+blocks.n.hook_mlp_out == actvation after mlp_out (mlp.hook_post %% mlp.W_out)
+blocks.n.hook_resid_post  == residual stream right after the MLP
+ln_final.hook_scale == resid_pre.std(dim=-1, keepdim=True, unbiased=False)
+ln_final.hook_normalized == normalized residual stream right before unembedding
+
+'''
+
+# These can be extracted AFTER running 
+# logits, cache = model.run_with_cache(prompt_list) like so:
+# cache["blocks.12.mlp_hook_post"]
+# or
+# cache["blocks.23.hook_resid_post"]
+
+# The output object will be a tensor of dimensions [# prompts, max prompt length, vector size]
+
+# To construct linear feature directions, you should (i) write a set of ~25 prompt pairs encapsulating the feature of interest (e.g. "I loved that movie, it was great" and "I hated that movie, it was terrible"); (ii) average the activations across all tokens, typically from blocks.n.hook_resid_post; (iii) calculate the differences between the average activations for each pair (e.g. mean("I loved the movie") - mean("I hated the movie")); (iv) average all ~25 differences; (v) normalize the result. Note: You should average across ALL tokens' activations, not just the last token!! That's right, ALL TOKENS' ACTIVATIONS!
+
+#########
