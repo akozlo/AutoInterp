@@ -1,2 +1,29 @@
+# Environment and secrets
 .env
+
+# Generated outputs
 projects/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+
+# HuggingFace model cache
+hf_models/
+
+# Package metadata
+*.egg-info/
+
+# Logs
+*.log
+logs/
+
+# IDE configs
+.claude/
+.idea/
+.vscode/

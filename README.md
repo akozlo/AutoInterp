@@ -15,21 +15,35 @@ AutoInterp is still in very early stages and may be buggy. Please feel free to s
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/auto-interp-agent.git
-cd auto-interp-agent
+git clone https://github.com/akozlo/AutoInterp.git
+cd AutoInterp
 ```
 
-2. Create and activate a virtual environment:
+2. Set up a Python environment (choose one option):
+
+**Option A: Use an existing conda/venv environment**
+
+If you already have a conda or venv environment with your desired packages, simply activate it before running AutoInterp. The system will auto-detect and use your active environment:
+```bash
+conda activate myenv  # or: source myenv/bin/activate
+pip install -r requirements.txt
+```
+
+**Option B: Create a new virtual environment**
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
+**Option C: Let AutoInterp handle it**
 
-# Optional: install the package to expose the CLI entry point
+If you don't activate any environment, AutoInterp will either:
+- Use Docker sandbox mode (if Docker is installed) - recommended for security
+- Create its own venv at `~/.autointerp/venv` and install dependencies automatically
+
+3. (Optional) Install the package to expose the CLI entry point:
+```bash
 pip install -e .
 ```
 

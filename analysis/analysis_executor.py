@@ -141,14 +141,174 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
         if self.sandbox_enabled:
             docker_path = shutil.which("docker")
             if not docker_path:
-                msg = (
-                    "Docker executable not found but sandbox mode is enabled. "
-                    "Install Docker or disable sandbox execution in config.yaml."
-                )
-                self.logger.critical(msg)
-                raise RuntimeError(msg)
-            self.logger.info(f"Docker sandbox enabled using image: {self.docker_image}")
-        
+                self._handle_docker_not_found()
+            else:
+                self.logger.info(f"Docker sandbox enabled using image: {self.docker_image}")
+
+    def _handle_docker_not_found(self):
+        """
+        Handle the case when Docker is not found but sandbox mode is enabled.
+        Provides interactive options to install Docker or proceed without sandboxing.
+        """
+        import sys
+
+        print("\n" + "="*60)
+        print("DOCKER NOT FOUND")
+        print("="*60)
+        print("Docker is required for sandbox mode but was not found on your system.")
+        print("Sandbox mode provides security isolation when executing AI-generated code.")
+        print()
+
+        while True:
+            print("What would you like to do?")
+            print("1. Install Docker (get installation instructions)")
+            print("2. Proceed without sandboxing (disable sandbox mode)")
+            print("3. Exit")
+            print()
+
+            try:
+                choice = input("Please select an option (1-3): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nExiting...")
+                sys.exit(1)
+
+            if choice == "1":
+                self._show_docker_installation_instructions()
+                print("\nAfter installing Docker, please restart the AutoInterp system.")
+                sys.exit(0)
+            elif choice == "2":
+                if self._disable_sandbox_mode():
+                    print("\n" + "="*60)
+                    print("SANDBOX MODE DISABLED")
+                    print("="*60)
+                    print("Sandbox mode has been disabled in your config.yaml file.")
+                    print("Code will now execute directly in your Python environment.")
+                    print()
+                    print("To re-enable sandbox mode later:")
+                    print("1. Install Docker on your system")
+                    print("2. Change 'sandbox: false' to 'sandbox: true' in config.yaml")
+                    print("   (under analysis.execution section)")
+                    print("="*60)
+                    print()
+
+                    # Update internal state to reflect disabled sandboxing
+                    self.sandbox_enabled = False
+                    return
+                else:
+                    print("Failed to update configuration. Please manually edit config.yaml")
+                    print("Change 'analysis.execution.sandbox' to false")
+                    sys.exit(1)
+            elif choice == "3":
+                print("Exiting...")
+                sys.exit(0)
+            else:
+                print("Invalid choice. Please select 1, 2, or 3.")
+                print()
+
+    def _show_docker_installation_instructions(self):
+        """
+        Display Docker installation instructions for different operating systems.
+        """
+        import platform
+
+        print("\n" + "="*60)
+        print("DOCKER INSTALLATION INSTRUCTIONS")
+        print("="*60)
+
+        system = platform.system().lower()
+
+        if system == "linux":
+            print("For Linux (Ubuntu/Debian):")
+            print("1. Update package index:")
+            print("   sudo apt-get update")
+            print()
+            print("2. Install Docker:")
+            print("   sudo apt-get install docker.io")
+            print()
+            print("3. Start and enable Docker:")
+            print("   sudo systemctl start docker")
+            print("   sudo systemctl enable docker")
+            print()
+            print("4. Add your user to docker group (optional, to run without sudo):")
+            print("   sudo usermod -aG docker $USER")
+            print("   # Log out and back in for this to take effect")
+            print()
+            print("For other Linux distributions, visit: https://docs.docker.com/engine/install/")
+
+        elif system == "darwin":  # macOS
+            print("For macOS:")
+            print("1. Download Docker Desktop from:")
+            print("   https://www.docker.com/products/docker-desktop")
+            print()
+            print("2. Install the downloaded .dmg file")
+            print()
+            print("3. Start Docker Desktop from Applications")
+            print()
+            print("Alternative - using Homebrew:")
+            print("   brew install --cask docker")
+
+        elif system == "windows":
+            print("For Windows:")
+            print("1. Download Docker Desktop from:")
+            print("   https://www.docker.com/products/docker-desktop")
+            print()
+            print("2. Install the downloaded .exe file")
+            print()
+            print("3. Restart your computer if prompted")
+            print()
+            print("4. Start Docker Desktop")
+            print()
+            print("Note: Docker Desktop requires Windows 10/11 with WSL2 enabled")
+        else:
+            print(f"For {system}:")
+            print("Please visit https://docs.docker.com/engine/install/ for installation instructions")
+
+        print()
+        print("After installation, verify Docker is working by running:")
+        print("   docker --version")
+        print("="*60)
+
+    def _disable_sandbox_mode(self) -> bool:
+        """
+        Update the config.yaml file to disable sandbox mode.
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        import yaml
+        from pathlib import Path
+
+        try:
+            # Find the config.yaml file (should be in the repo root)
+            config_path = Path(__file__).resolve().parents[1] / "config.yaml"
+
+            if not config_path.exists():
+                self.logger.error(f"Config file not found at {config_path}")
+                return False
+
+            # Read current config
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+
+            # Update the sandbox setting
+            if 'analysis' not in config_data:
+                config_data['analysis'] = {}
+            if 'execution' not in config_data['analysis']:
+                config_data['analysis']['execution'] = {}
+
+            config_data['analysis']['execution']['sandbox'] = False
+
+            # Write back to file
+            with open(config_path, 'w') as f:
+                yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+
+            self.logger.info("Successfully disabled sandbox mode in config.yaml")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to update config.yaml: {e}")
+            return False
+
     def _get_error_data(self, execution_dir: Path) -> Optional[Dict[str, str]]:
         """
         Get error data from stderr.txt file.
@@ -716,7 +876,32 @@ if __name__ == "__main__":
                 except Exception as e:
                     self.logger.error(f"Error testing existing environment: {str(e)}")
                     # If test fails, continue with setup
-        
+
+        # Auto-detect active virtual environment from environment variables
+        # Check VIRTUAL_ENV (standard venvs) or CONDA_PREFIX (conda environments)
+        active_venv = os.environ.get('VIRTUAL_ENV') or os.environ.get('CONDA_PREFIX')
+        if active_venv:
+            env_dir = Path(active_venv)
+            python_path = env_dir / "bin" / "python"
+            if sys.platform.startswith('win'):
+                python_path = env_dir / "Scripts" / "python.exe"
+
+            if python_path.exists():
+                try:
+                    test_result = subprocess.run(
+                        [str(python_path), "-c", "print('venv test successful')"],
+                        capture_output=True, text=True, timeout=30
+                    )
+                    if test_result.returncode == 0:
+                        self.logger.info(f"Auto-detected active virtual environment at {env_dir}")
+                        print(f"[AUTOINTERP] Auto-detected active virtual environment: {env_dir}")
+                        self.env_path = str(env_dir)
+                        return
+                    else:
+                        self.logger.warning(f"Active virtual environment test failed: {test_result.stderr}")
+                except Exception as e:
+                    self.logger.warning(f"Error testing active virtual environment: {str(e)}")
+
         # Check if we should use an existing virtual environment
         use_existing_venv = self.config.get("execution", {}).get("use_existing_venv", False)
         existing_venv_path = self.config.get("execution", {}).get("existing_venv_path", "")

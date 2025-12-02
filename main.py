@@ -47,7 +47,7 @@ def select_provider_and_model() -> Tuple[str, str]:
     model_mappings = {
         "anthropic": {
             "Claude Sonnet 4.5": "claude-sonnet-4-5",
-            "Claude Opus 4.1": "claude-opus-4-1-20250805"
+            "Claude Opus 4.5": "claude-opus-4-5-20251101"
         },
         "openai": {
             "GPT-5": "gpt-5-2025-08-07",
@@ -55,11 +55,12 @@ def select_provider_and_model() -> Tuple[str, str]:
         },
         "openrouter": {
             "Claude Sonnet 4.5": "anthropic/claude-sonnet-4.5",
-            "Claude Opus 4.1": "anthropic/claude-opus-4.1",
+            "Claude Opus 4.5": "anthropic/claude-opus-4.5",
             "GPT-5": "openai/gpt-5",
             "GPT-5-mini": "openai/gpt-5-mini",
             "Kimi K2": "moonshotai/kimi-k2-0905",
-            "Qwen3 235B-A22B": "qwen/qwen3-235b-a22b"
+            "Qwen3 235B-A22B": "qwen/qwen3-235b-a22b",
+            "DeepSeek V3.2": "deepseek/deepseek-v3.2"
         }
     }
 
@@ -135,20 +136,16 @@ def apply_provider_model_override(config: Dict[str, Any], provider: str, model_i
     if provider == "manual":
         return config
 
-    print(f"\n[AUTOINTERP] Applying {provider.upper()} + {model_id} to all agents...")
-
     # Update all agent configurations
     for agent_name, agent_config in config.get("agents", {}).items():
         if "llm" in agent_config:
             agent_config["llm"]["provider"] = provider
             agent_config["llm"]["model"] = model_id
-            print(f"[AUTOINTERP]   Updated {agent_name}")
 
     # Also update the default LLM config if it exists
     if "llm" in config:
         config["llm"]["provider"] = provider
         config["llm"]["model"] = model_id
-        print(f"[AUTOINTERP]   Updated default LLM config")
 
     return config
 
@@ -2197,7 +2194,6 @@ async def async_main(args: argparse.Namespace) -> None:
 
         # Re-initialize components with updated config if provider was changed
         if selected_provider != "manual":
-            print(f"[AUTOINTERP] Re-initializing components with {selected_provider.upper()} provider...")
 
             # Get the updated config
             updated_config = framework["config"]
@@ -2261,9 +2257,12 @@ async def async_main(args: argparse.Namespace) -> None:
             })
 
         # Get user input for task description
-        print("\n" + "="*60)
+        # Use same golden/amber color as ASCII art title (#be8d13 = RGB 190,141,19)
+        color_start = "\033[38;2;190;141;19m"
+        color_end = "\033[0m"
+        print(f"\n{color_start}" + "="*60)
         print("Welcome to the AutoInterp Agent Framework!")
-        print("="*60)
+        print("="*60 + f"{color_end}")
         user_input = input("\nEnter a topic you are interested in for LLM interpretability research (press Enter for auto-generated topic): ").strip()
         
         if not user_input:

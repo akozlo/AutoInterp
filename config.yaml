@@ -50,8 +50,8 @@ execution:
   max_memory_mb: 4096
   force_clean_venv: false  # Force clean virtual environment on startup (disabled when using existing venv)
   use_system_python: false  # Set to true to use system Python instead of virtual environment
-  use_existing_venv: true  # Set to true to use an existing virtual environment  
-  existing_venv_path: "/home/akozlo/miniconda3/envs/akpy25"  # Path to existing virtual environment
+  use_existing_venv: false  # Set to true to use an existing virtual environment (requires existing_venv_path)
+  existing_venv_path: ""  # Path to existing virtual environment (or use --venv CLI flag)
   fail_on_max_retries: false  # If true, shutdown entire system when max_retries exceeded; if false, continue to next analysis
   docker:
     image: "python:3.10-slim"  # Default container image for sandbox execution
