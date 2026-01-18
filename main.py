@@ -508,7 +508,7 @@ async def prioritize_questions(
             import shutil
             shutil.copy(raw_questions_path, prioritized_path)
             print(f"[AUTOINTERP] Copied raw questions to {prioritized_path}")
-    
+    new_project_id = None
     # Read and print prioritized question
     if prioritized_path.exists():
         try:
@@ -541,10 +541,6 @@ async def prioritize_questions(
                     config["title"] = extracted_title
                     
                     print(f"[AUTOINTERP] Setting new project ID: {new_project_id}")
-                    
-                    # Immediately rename the project (we'll do it properly later)
-                    old_project_id = config.get("project_id", "working_project")
-                    config["project_id"] = new_project_id
             
         except Exception as e:
             print(f"[AUTOINTERP] Error reading prioritized question: {e}")
@@ -563,8 +559,6 @@ async def prioritize_questions(
     # If we already have a title from the prioritized question, use that
     # Otherwise, fall back to the task name
     if "title" in config:
-        # We already set new_project_id in config when we extracted the title
-        new_project_id = config["project_id"]
         print(f"[AUTOINTERP] Using extracted title for project ID: {new_project_id}")
     else:
         # Fall back to using the task name with timestamp
@@ -646,6 +640,8 @@ async def prioritize_questions(
     
     # Return our simple dict with raw_text instead of structured question
     return selected_hyp
+
+
 
 async def analyze_question(
     active_question: Union[str, Dict[str, Any]],  # Can be raw text or dict
