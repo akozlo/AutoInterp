@@ -5,8 +5,8 @@ Implements a streamlined pipeline for automated interpretability research.
 """
 
 import os
-import sys
 import re
+import sys
 import argparse
 import asyncio
 import json
@@ -26,7 +26,7 @@ try:
 except ImportError:
     pass  # dotenv is optional
 
-from AutoInterp.core.utils import setup_logging, load_yaml, ensure_directory, get_timestamp, load_prompts, PathResolver, log_to_comprehensive_log, clean_code_content
+from AutoInterp.core.utils import setup_logging, load_yaml, ensure_directory, get_timestamp, load_prompts, PathResolver, log_to_comprehensive_log, clean_code_content, PACKAGE_ROOT
 from AutoInterp.core.llm_interface import LLMInterface
 from AutoInterp.questions.question_manager import QuestionManager
 from AutoInterp.analysis.analysis_generator import AnalysisGenerator
@@ -1957,6 +1957,8 @@ async def generate_report(
     
     # Generate report (let the report generator handle title generation)
     try:
+        task_description = config.get("task", {}).get("description", "")
+        task_name = task_description[:50] + "..." if len(task_description) > 50 else task_description or "Unnamed Task"
         # Pass the active_question as plain text directly
         report_path = await report_generator.generate_report(
             question=active_question,  # Plain text, not a dictionary
@@ -2028,7 +2030,7 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
     config = framework["config"]
     
     # Setup console output logging immediately to capture all pipeline output
-    path_resolver = PathResolver()  # Get the singleton instance
+    path_resolver = framework["path_resolver"]
     project_dir = path_resolver.get_project_dir()
     from AutoInterp.core.utils import setup_console_logging_to_file
     setup_console_logging_to_file(project_dir)
@@ -2041,25 +2043,91 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
     print(f"[AUTOINTERP] Starting task execution - {get_timestamp()}")
     print(f"[AUTOINTERP] Task: {task_name}")
     print("="*80 + "\n")
-    
+
+    use_context_pack_question = False
+    context_pack_active_question = None
+
     try:
-        # 1. Question Generation
-        await generate_questions(
-            llm_interface=framework["llm_interface"],
-            question_manager=framework["question_manager"],
-            config=config,
-            logger=logger
-        )
-        
-        # 2. Question Prioritization
-        active_question = await prioritize_questions(
-            question_manager=framework["question_manager"],
-            llm_interface=framework["llm_interface"],
-            config=config,
-            logger=logger,
-            evaluator=framework["evaluator"]
-        )
-        
+        # Context pack (optional): seed + forward/backward -> 3 papers -> one question; 若开启则替代后面的「问题生成+选题」
+        ctx_cfg = config.get("context_pack", {}) or {}
+        if ctx_cfg.get("enabled", False):
+            print("[AUTOINTERP] Context pack enabled: building 3-paper pack and generating question...")
+            try:
+                arxiv_interp_root = PACKAGE_ROOT / "arxiv_interp_graph"
+                if str(arxiv_interp_root) not in sys.path:
+                    sys.path.insert(0, str(arxiv_interp_root))
+                graph_path = ctx_cfg.get("graph") or (PACKAGE_ROOT / "arxiv_interp_graph" / "output" / "graph_state.json")
+                graph_path = Path(graph_path)
+                if not graph_path.is_absolute():
+                    graph_path = (PACKAGE_ROOT / graph_path).resolve()
+                questions_dir = path_resolver.ensure_path("questions")
+                if graph_path.exists():
+                    from context_pack.run import run_context_pack
+                    from api_client import SemanticScholarClient
+                    from topic_package.llm_client import get_llm_generate_fn
+                    s2_client = SemanticScholarClient()
+                    llm_config = config.get("llm") or {}
+                    if not llm_config and (PACKAGE_ROOT / ".last_llm.json").exists():
+                        with open(PACKAGE_ROOT / ".last_llm.json") as f:
+                            llm_config = json.load(f)
+                    llm_generate_fn = None
+                    if llm_config and (llm_config.get("provider") or llm_config.get("model")):
+                        llm_generate_fn = get_llm_generate_fn(
+                            provider=llm_config.get("provider"),
+                            model=llm_config.get("model"),
+                        )
+                    result = run_context_pack(
+                        graph_path=graph_path,
+                        output_dir=questions_dir,
+                        seed_id=ctx_cfg.get("seed_id"),
+                        s2_client=s2_client,
+                        seed=ctx_cfg.get("seed"),
+                        download_pdfs=True,
+                        llm_generate_fn=llm_generate_fn,
+                    )
+                    question_text = result.get("question_text") or ""
+                    if question_text:
+                        (questions_dir / "prioritized_question.txt").write_text(question_text, encoding="utf-8")
+                        (questions_dir / "questions.txt").write_text(question_text, encoding="utf-8")
+                        context_pack_active_question = question_text
+                        use_context_pack_question = True
+                        print(f"[AUTOINTERP] Context pack done: 3 papers, manifest + PDFs in questions/, question in prioritized_question.txt")
+                    else:
+                        print("[AUTOINTERP] Context pack produced no question; falling back to normal question generation.")
+                else:
+                    print(f"[AUTOINTERP] Context pack skipped: graph not found at {graph_path}")
+            except Exception as e:
+                logger.warning(f"Context pack failed: {e}")
+                import traceback
+                traceback.print_exc()
+                print("[AUTOINTERP] Falling back to normal question generation.")
+
+        # 1. Question Generation（若已用 context pack 生成问题则跳过）
+        if not use_context_pack_question:
+            await generate_questions(
+                llm_interface=framework["llm_interface"],
+                question_manager=framework["question_manager"],
+                config=config,
+                logger=logger
+            )
+            # 2. Question Prioritization
+            active_question = await prioritize_questions(
+                question_manager=framework["question_manager"],
+                llm_interface=framework["llm_interface"],
+                config=config,
+                logger=logger,
+                evaluator=framework["evaluator"]
+            )
+        else:
+            active_question = context_pack_active_question
+            if not active_question:
+                prioritized_path = framework["question_manager"].storage_dir / "prioritized_question.txt"
+                if prioritized_path.exists():
+                    active_question = prioritized_path.read_text(encoding="utf-8")
+            if not active_question:
+                active_question = "No question available"
+            logger.info("Using question from context pack (skipped generate_questions + prioritize_questions).")
+
         # 3. Iterative Analysis and Evaluation
         all_analyses, all_evaluations = await iterative_analysis(
             active_question=active_question,
@@ -2156,7 +2224,232 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Root directory for generated projects (defaults to the package projects folder)",
         default=None,
     )
+    subparsers = parser.add_subparsers(dest="command", help="Command to run (default: run)")
+    # Default: run the full interpretability pipeline
+    run_parser = subparsers.add_parser("run", help="Run the full interpretability research pipeline (default)")
+    run_parser.add_argument("--config", help="Path to override configuration file", default=None)
+    run_parser.add_argument("--venv", help="Path to existing virtual environment to use", default=None)
+    run_parser.add_argument("--projects-dir", help="Root directory for projects", default=None)
+    run_parser.set_defaults(command="run")
+    # Topic mining: generate topics from citation graph (graph/embed/hybrid)
+    topic_parser = subparsers.add_parser("topic-mining", help="Generate topics from citation graph (graph/embed/hybrid)")
+    topic_parser.add_argument("--graph", required=True, help="Path to graph_state.json or citation_graph.graphml")
+    topic_parser.add_argument("--output-dir", help="Output directory for topics.json and report (default: <graph_dir>/topic_mining)")
+    topic_parser.add_argument("--topic-mode", choices=["graph", "embed", "hybrid"], default="graph")
+    topic_parser.add_argument("--hybrid-mode", choices=["union", "intersection"], default="union")
+    topic_parser.add_argument("--knn-k", type=int, default=10)
+    topic_parser.add_argument("--sim-threshold", type=float, default=0.3)
+    topic_parser.add_argument("--resolution", type=float, default=1.0)
+    topic_parser.add_argument("--embedder-backend", choices=["sentence-transformers", "openai"], default="sentence-transformers")
+    topic_parser.add_argument("--embedder-model", default=None)
+    topic_parser.add_argument("--embed-cache-dir", default=None)
+    topic_parser.add_argument("--top-representatives", type=int, default=10)
+    topic_parser.add_argument("--top-keywords", type=int, default=10)
+    topic_parser.add_argument("--force", action="store_true", help="Recompute even if outputs exist")
+    topic_parser.set_defaults(command="topic-mining")
+
+    # context-pack: seed + forward/backward -> 3 papers -> PDFs + manifest -> optional LLM question (会后构想)
+    ctx_parser = subparsers.add_parser("context-pack", help="Build 3-paper context pack (seed + citing + cited), PDFs + manifest, optional research question")
+    ctx_parser.add_argument("--output-dir", default=None, help="Output directory; default: auto from generated question (projects/<slug>_<timestamp>/questions)")
+    ctx_parser.add_argument("--graph", default=None, help="Path to graph_state.json (default: arxiv_interp_graph/output/graph_state.json)")
+    ctx_parser.add_argument("--seed-id", default=None, help="Seed paper ID (default: random)")
+    ctx_parser.add_argument("--seed", type=int, default=None, help="Random seed (default: different each run; set e.g. 42 for reproducibility)")
+    ctx_parser.add_argument("--no-download", action="store_true", help="Do not download PDFs")
+    ctx_parser.add_argument("--no-llm", action="store_true", help="Do not generate research question")
+    ctx_parser.set_defaults(command="context-pack")
+
+    parser.set_defaults(command="run")
     return parser
+
+
+def get_topic_suggestions_from_mining(max_suggestions: int = 5) -> Optional[List[Dict[str, Any]]]:
+    """
+    If the interpretability citation graph and topic mining are available, return
+    a list of suggested topics (each with 'description', 'size', 'score', 'keywords').
+    Otherwise return None so the caller can fall back to LLM-generated topic.
+    """
+    pkg_root = Path(__file__).resolve().parent
+    graph_path = pkg_root / "arxiv_interp_graph" / "output" / "graph_state.json"
+    if not graph_path.exists():
+        return None
+    topics_json = graph_path.parent / "topic_mining" / "topics.json"
+    try:
+        if str(pkg_root) not in sys.path:
+            sys.path.insert(0, str(pkg_root))
+        from arxiv_interp_graph.topic_mining.run import run_topic_mining
+    except ImportError:
+        try:
+            from topic_mining.run import run_topic_mining
+        except ImportError:
+            return None
+    if not topics_json.exists():
+        try:
+            run_topic_mining(
+                graph_path=graph_path,
+                output_dir=graph_path.parent / "topic_mining",
+                topic_mode="graph",
+                force=False,
+            )
+        except Exception:
+            return None
+    if not topics_json.exists():
+        return None
+    try:
+        with open(topics_json) as f:
+            topics = json.load(f)
+    except Exception:
+        return None
+    if not topics:
+        return None
+    suggestions = []
+    for t in topics[:max_suggestions]:
+        kw = t.get("keywords") or []
+        desc = " ".join(kw[:6]) if kw else t.get("topic_id", "topic")
+        suggestions.append({
+            "description": desc,
+            "size": t.get("size", 0),
+            "score": t.get("score", 0),
+            "keywords": kw,
+        })
+    return suggestions
+
+
+def run_topic_mining_cmd(args: argparse.Namespace) -> None:
+    """Run topic mining step (graph/embed/hybrid) and write topics.json + report."""
+    # Ensure arxiv_interp_graph is importable from package root
+    pkg_root = Path(__file__).resolve().parent
+    if str(pkg_root) not in sys.path:
+        sys.path.insert(0, str(pkg_root))
+    try:
+        from arxiv_interp_graph.topic_mining.run import run_topic_mining
+    except ImportError:
+        from topic_mining.run import run_topic_mining
+    graph_path = Path(args.graph)
+    if not graph_path.is_absolute():
+        graph_path = (pkg_root / graph_path).resolve()
+    if not graph_path.exists():
+        print(f"[AUTOINTERP] ERROR: Graph path not found: {graph_path}")
+        sys.exit(1)
+    output_dir = args.output_dir
+    if not output_dir:
+        output_dir = graph_path.parent / "topic_mining"
+    output_dir = Path(output_dir)
+    result = run_topic_mining(
+        graph_path=graph_path,
+        output_dir=output_dir,
+        topic_mode=args.topic_mode,
+        hybrid_mode=args.hybrid_mode,
+        knn_k=args.knn_k,
+        sim_threshold=args.sim_threshold,
+        resolution=args.resolution,
+        embedder_backend=args.embedder_backend,
+        embedder_model=args.embedder_model,
+        embed_cache_dir=args.embed_cache_dir,
+        top_representatives=args.top_representatives,
+        top_keywords=args.top_keywords,
+        force=args.force,
+    )
+    print(f"[AUTOINTERP] Topic mining complete: {len(result['topics'])} topics")
+    for k, v in result.get("output_paths", {}).items():
+        print(f"  {k}: {v}")
+
+
+def run_context_pack_cmd(args: argparse.Namespace) -> None:
+    """Build 3-paper context pack (seed + forward/backward), PDFs + manifest, optional LLM question (会后构想)."""
+    pkg_root = Path(__file__).resolve().parent
+    arxiv_interp_root = pkg_root / "arxiv_interp_graph"
+    # arxiv_interp_graph 内部用 from config import，需将其目录放在 path 前才能从仓库根运行
+    if str(arxiv_interp_root) not in sys.path:
+        sys.path.insert(0, str(arxiv_interp_root))
+    try:
+        from context_pack.run import run_context_pack
+        from api_client import SemanticScholarClient
+    except ImportError as e:
+        print(f"[AUTOINTERP] ERROR: Cannot load context_pack (is arxiv_interp_graph present?): {e}")
+        sys.exit(1)
+    graph_path = args.graph
+    if not graph_path:
+        graph_path = pkg_root / "arxiv_interp_graph" / "output" / "graph_state.json"
+    graph_path = Path(graph_path)
+    if not graph_path.is_absolute():
+        graph_path = (pkg_root / graph_path).resolve()
+    if not graph_path.exists():
+        print(f"[AUTOINTERP] ERROR: Graph not found: {graph_path}")
+        sys.exit(1)
+    if args.output_dir is None:
+        ts = get_timestamp("%Y-%m-%dT%H-%M-%S")
+        output_dir = (PACKAGE_ROOT / "projects" / f"context_pack_{ts}" / "questions").resolve()
+    else:
+        output_dir = Path(args.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[AUTOINTERP] Context pack output: {output_dir}")
+    client = SemanticScholarClient()
+    llm_generate_fn = None
+    if getattr(args, "no_llm", False):
+        print("[AUTOINTERP] Skipping question generation (--no-llm). No context_pack_question.txt will be written.")
+    if not getattr(args, "no_llm", False):
+        try:
+            last_llm = pkg_root / ".last_llm.json"
+            cfg_path = pkg_root / "config.yaml"
+            llm_config = {}
+            if last_llm.exists():
+                with open(last_llm) as f:
+                    llm_config = json.load(f)
+            elif cfg_path.exists():
+                import yaml
+                with open(cfg_path) as f:
+                    root = yaml.safe_load(f) or {}
+                llm_config = root.get("llm") or {}
+            if llm_config and (llm_config.get("provider") or llm_config.get("model")):
+                from topic_package.llm_client import get_llm_generate_fn
+                llm_generate_fn = get_llm_generate_fn(
+                    provider=llm_config.get("provider"),
+                    model=llm_config.get("model"),
+                )
+                print("[AUTOINTERP] Using LLM for research question: {} / {}".format(
+                    llm_config.get("provider"), llm_config.get("model")))
+        except Exception as e:
+            print("[AUTOINTERP] LLM config load failed:", e)
+    if llm_generate_fn is None and not getattr(args, "no_llm", False):
+        print("[AUTOINTERP] No LLM config (.last_llm.json or config.yaml llm). No context_pack_question.txt will be written.")
+    result = run_context_pack(
+        graph_path=graph_path,
+        output_dir=output_dir,
+        seed_id=args.seed_id,
+        s2_client=client,
+        seed=getattr(args, "seed", None),
+        download_pdfs=not getattr(args, "no_download", False),
+        llm_generate_fn=llm_generate_fn,
+    )
+    papers = result.get("papers", [])
+    print(f"[AUTOINTERP] Context pack: {len(papers)} papers")
+    for p in papers:
+        print(f"  [{p.get('relation')}] {p.get('paperId', '')[:12]}... {p.get('title', '')[:50]}...")
+    if result.get("manifest_path"):
+        print(f"[AUTOINTERP] manifest: {result['manifest_path']}")
+    if result.get("question_path"):
+        print(f"[AUTOINTERP] question: {result['question_path']}")
+    elif llm_generate_fn is not None and not result.get("question_text"):
+        print("[AUTOINTERP] LLM was called but returned empty; context_pack_question.txt was not written.")
+    # Auto-rename project folder from context_pack_<ts> to <slug>_<ts> using QUESTION line
+    if args.output_dir is None and result.get("question_text"):
+        qtext = result["question_text"]
+        q_match = re.search(r"QUESTION:\s*(.+?)(?:\n|$)", qtext, re.IGNORECASE | re.DOTALL)
+        if q_match:
+            title = q_match.group(1).strip()
+            slug = re.sub(r"[^\w\s\-]", "", title).strip()
+            slug = re.sub(r"\s+", "_", slug).lower()[:50].strip("_")
+            if slug:
+                old_parent = output_dir.parent
+                new_name = f"{slug}_{ts}"
+                projects_base = PACKAGE_ROOT / "projects"
+                new_parent = projects_base / new_name
+                if old_parent != new_parent and old_parent.exists() and not new_parent.exists():
+                    try:
+                        os.rename(old_parent, new_parent)
+                        print(f"[AUTOINTERP] Renamed project to: {new_parent / 'questions'}")
+                    except Exception as e:
+                        print(f"[AUTOINTERP] Could not rename to {new_name}: {e}")
 
 
 async def async_main(args: argparse.Namespace) -> None:
@@ -2191,6 +2484,15 @@ async def async_main(args: argparse.Namespace) -> None:
             selected_provider,
             selected_model
         )
+
+        # Save selected provider/model so topic-package uses the same model when calling LLM to generate topic
+        if selected_provider and selected_provider != "manual" and selected_model:
+            try:
+                last_llm_path = Path(__file__).parent / ".last_llm.json"
+                with open(last_llm_path, "w") as f:
+                    json.dump({"provider": selected_provider, "model": selected_model}, f, indent=0)
+            except Exception:
+                pass
 
         # Re-initialize components with updated config if provider was changed
         if selected_provider != "manual":
@@ -2263,18 +2565,30 @@ async def async_main(args: argparse.Namespace) -> None:
         print(f"\n{color_start}" + "="*60)
         print("Welcome to the AutoInterp Agent Framework!")
         print("="*60 + f"{color_end}")
-        user_input = input("\nEnter a topic you are interested in for LLM interpretability research (press Enter for auto-generated topic): ").strip()
+        user_input = input("\nEnter a topic you are interested in for LLM interpretability research (press Enter for suggestions from literature): ").strip()
         
         if not user_input:
-            print("[AUTOINTERP] No topic provided. Generating a topic automatically...")
-            try:
-                # Generate topic using question manager
-                generated_topic = await framework["question_manager"].generate_topic()
-                print(f"[AUTOINTERP] Generated topic: {generated_topic}")
-                framework["config"]["task"]["description"] = generated_topic
-            except Exception as e:
-                print(f"[AUTOINTERP] Error generating topic: {e}")
-                print("[AUTOINTERP] No task description available. Please provide a topic manually.")
+            # Pressed Enter: try topic mining suggestions first, then fall back to LLM-generated topic
+            suggestions = get_topic_suggestions_from_mining(max_suggestions=5)
+            if suggestions:
+                # Auto-select the topic most worth doing (highest importance score; tie-break by size for more literature)
+                best = max(suggestions, key=lambda s: (s["score"], s["size"]))
+                chosen = best["description"]
+                print("\n[AUTOINTERP] Suggested topics from interpretability literature (citation graph):")
+                for i, s in enumerate(suggestions, 1):
+                    mark = "  <-- selected" if s is best else ""
+                    print(f"  [{i}] {s['description']} (size={s['size']}, score={s['score']:.2f}){mark}")
+                print(f"[AUTOINTERP] Auto-selected topic (highest score, size={best['size']}): {chosen}")
+                framework["config"]["task"]["description"] = chosen
+            else:
+                print("[AUTOINTERP] No topic provided and no citation graph found. Generating a topic with LLM...")
+                try:
+                    generated_topic = await framework["question_manager"].generate_topic()
+                    print(f"[AUTOINTERP] Generated topic: {generated_topic}")
+                    framework["config"]["task"]["description"] = generated_topic
+                except Exception as e:
+                    print(f"[AUTOINTERP] Error generating topic: {e}")
+                    print("[AUTOINTERP] No task description available. Please provide a topic manually.")
         else:
             print(f"[AUTOINTERP] Using your topic: {user_input}")
             framework["config"]["task"]["description"] = user_input
@@ -2304,6 +2618,25 @@ def main(argv: Optional[List[str]] = None) -> None:
     """
     parser = build_argument_parser()
     args = parser.parse_args(argv)
+    command = getattr(args, "command", "run")
+    if command == "topic-mining":
+        try:
+            run_topic_mining_cmd(args)
+        except Exception as e:
+            import traceback
+            print(f"[AUTOINTERP] Topic mining failed: {e}")
+            traceback.print_exc()
+            sys.exit(1)
+        return
+    if command == "context-pack":
+        try:
+            run_context_pack_cmd(args)
+        except Exception as e:
+            import traceback
+            print(f"[AUTOINTERP] Context pack failed: {e}")
+            traceback.print_exc()
+            sys.exit(1)
+        return
     try:
         asyncio.run(async_main(args))
     except KeyboardInterrupt:

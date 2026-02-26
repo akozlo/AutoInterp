@@ -70,6 +70,12 @@ CRITICAL: All visualization files MUST be saved to this specific directory: {viz
 - Always use absolute paths starting with {viz_output_dir}/
 - Do not save files to the current working directory or relative paths
 - Give your output files descriptive names that relate to what they visualize
+
+- You MUST set the matplotlib backend to 'Agg' BEFORE importing pyplot. This prevents GUI errors on headless systems.
+- Start your script EXACTLY like this:
+  import matplotlib
+  matplotlib.use('Agg')
+  import matplotlib.pyplot as plt
 """
         
         # Format the user prompt with the actual input data

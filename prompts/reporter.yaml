@@ -33,6 +33,9 @@ introduction:
     Based on this comprehensive log, write a three-paragraph Introduction section for this interpretability research report. Be sure to pay special attention to the original research question and how it was answered:
     
     {comprehensive_log}
+
+    Literature Pack (use to ground related work):
+    {literature_pack}
     
     Write a compelling Introduction that follows the hook-gap-intervention structure described in the system prompt. Each paragraph should be clearly focused on its purpose and flow naturally into the next. No formatting. Just plain old txt.
 
@@ -56,6 +59,9 @@ methodology_summary:
     
     **Comprehensive Log:**
     {comprehensive_log}
+
+    Literature Pack (use to ground related work):
+    {literature_pack}
     
     Note that the study is divided into several analyses. You should begin your methodology write-up with one or two paragraphs that summarize the overall approach and then go into detail about the specific analyses. Do not use extensive markdown formating, but note each analysis as its one subsection with its heading in italics (e.g. *Analysis 1*). Do not put any heading like "Methodology" at the very top.
     For each analysis, include an equation if it is relevant. You should use LaTeX for the equations.
@@ -79,6 +85,9 @@ results_synthesis:
     
     **Comprehensive Log:**
     {comprehensive_log}
+
+    Literature Pack (use to ground related work):
+    {literature_pack}
     
     Note that the study is divided into several analyses. You should write up the results of ALL the analyses, but present them one-by-one. Do not use extensive markdown formating, but note each analysis as its one subsection with its heading in bold (e.g. **Analysis 1**). Do not put any heading like "Results" at the very top.
     
@@ -102,6 +111,9 @@ discussion_and_conclusion:
     
     **Comprehensive Log:**
     {comprehensive_log}
+
+    Literature Pack (use to ground related work):
+    {literature_pack}
     
     Clearly state the best answer to the research question, and how strong the evidence is for it. If results are inconclusive, state that. Summarize the key implications. Note limitations and suggest directions for future research. Do not use markdown formatting. Just several paragraphs of text.
 
@@ -125,5 +137,8 @@ abstract:
     **Comprehensive Log:**
     {comprehensive_log}
 
+    Literature Pack (use to ground related work):
+    {literature_pack}
+    
     Keep it concise (5-8 sentences total) but comprehensive. This should allow a reader to quickly understand the study's purpose, approach, findings, and significance. It should be one paragraph, and have no heading. It should read like an academic abstract.
   

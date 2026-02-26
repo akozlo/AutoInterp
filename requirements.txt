@@ -15,6 +15,7 @@ datasets>=1.18.0
 scikit-learn>=1.0.0
 faiss-cpu>=1.7.0  # For semantic search in future updates
 openai>=1.107.3
+anthropic>=0.18.0  # topic_package LLM (optional)
 
 # Visualization 
 plotly>=5.5.0
@@ -31,3 +32,9 @@ weasyprint>=56.0
 requests>=2.27.0
 python-dotenv>=0.19.0
 colorama>=0.4.4
+pypdf>=4.2.0
+
+# Topic mining (arxiv_interp_graph): embeddings + clustering
+sentence-transformers>=2.2.0
+hdbscan>=0.8.33
+# Optional: leidenalg, python-igraph (for Leiden; otherwise Louvain is used)

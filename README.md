@@ -90,6 +90,20 @@ python -m AutoInterp --projects-dir /absolute/or/relative/path
 interp-agent --help
 ```
 
+### arxiv_interp_graph (Context Pack)
+
+AutoInterp ships with the `arxiv_interp_graph` module, which builds a citation graph of interpretability papers and can generate a lightweight context pack. The context pack selects three related papers, downloads PDFs, and (optionally) uses an LLM to propose a single, testable research question.
+
+```bash
+# Run context pack from the repo root
+python main.py context-pack
+```
+
+Key outputs are written under `projects/<project_id>/questions/`:
+- `manifest.json` (paper metadata)
+- `pdfs/` (downloaded PDFs)
+- `context_pack_question.txt` (LLM-generated question, if enabled)
+
 ### Sandboxed Execution with Docker
 
 - Enable the sandbox by setting `analysis.execution.sandbox: true` (default) in `config.yaml`. When enabled, AutoInterp runs generated analysis scripts inside a Docker container instead of directly on the host.

@@ -23,6 +23,12 @@ framework:
 task:
   description: ""  # Task description will be provided by user or auto-generated
 
+context_pack:
+  enabled: true
+  graph: null   # null = use arxiv_interp_graph/output/graph_state.json
+  seed_id: null
+  seed: null   # null = different papers each run; set e.g. 42 for reproducibility
+
 # Model to analyze
 model:
   name: "meta-llama/Llama-3.2-1B-Instruct"  # HuggingFace model ID
@@ -35,8 +41,8 @@ analysis:
   execution:
     timeout: 120  # seconds
     max_memory: 4000  # MB
-    sandbox: true
-  executor_type: "sandbox"
+    sandbox: false
+  executor_type: "local"
   output_format: "json"
   timeout_per_analysis: 300
   max_iterations: 3      # Maximum number of analysis cycles per question
@@ -44,7 +50,7 @@ analysis:
 
 # Execution settings
 execution:
-  mode: "sandbox"
+  mode: "local"
   timeout: 300
   max_retries: 5
   max_memory_mb: 4096
@@ -102,8 +108,8 @@ output_directories:
 
 # Default LLM configuration
 llm:
-  provider: "anthropic"
-  model: "claude-sonnet-4-5"
+  provider: "openrouter"
+  model: "anthropic/claude-sonnet-4.6"
   temperature: 0.7
   max_tokens: 3000
   timeout: 120
@@ -113,8 +119,8 @@ agents:
   # Question Generation Agent
   question_generator:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.8
       max_tokens: 1000
       timeout: 60
@@ -122,8 +128,8 @@ agents:
   # Question Prioritization Agent
   question_prioritizer:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.667
       max_tokens: 1000
       timeout: 60
@@ -131,8 +137,8 @@ agents:
   # Analysis Planning Agent
   analysis_planner:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.7
       max_tokens: 3000
       timeout: 90
@@ -140,8 +146,8 @@ agents:
   # Analysis Generation Agent
   analysis_generator:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.7
       max_tokens: 12000
       timeout: 120
@@ -149,8 +155,8 @@ agents:
   # Visualization Planning Agent
   visualization_planner:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.7
       max_tokens: 3000
       timeout: 120
@@ -158,8 +164,8 @@ agents:
   # Visualization Generation Agent
   visualization_generator:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.7
       max_tokens: 12000
       timeout: 120
@@ -167,8 +173,8 @@ agents:
   # Analysis Evaluation Agent
   evaluator:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.7
       max_tokens: 31000
       timeout: 180
@@ -176,8 +182,8 @@ agents:
   # Visualization Evaluation Agent
   visualization_evaluator:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.3
       max_tokens: 2000
       timeout: 120
@@ -185,8 +191,8 @@ agents:
   # Report Generation Agent
   reporter:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.7
       max_tokens: 8000
       timeout: 120
@@ -194,8 +200,8 @@ agents:
   # Title Generation Agent
   title_generator:
     llm:
-      provider: "anthropic"
-      model: "claude-sonnet-4-5"
+      provider: "openrouter"
+      model: "anthropic/claude-sonnet-4.6"
       temperature: 0.7
       max_tokens: 200
       timeout: 30
