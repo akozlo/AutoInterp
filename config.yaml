@@ -25,22 +25,22 @@ task:
 
 # Model to analyze
 model:
-  name: "mistralai/Mistral-7B-Instruct-v0.3"  # HuggingFace model ID
-  tokenizer: "mistralai/Mistral-7B-Instruct-v0.3"
+  name: "meta-llama/Llama-3.2-1B-Instruct"  # HuggingFace model ID
+  tokenizer: "meta-llama/Llama-3.2-1B-Instruct"
   cache_dir: "hf_models"  # Local cache directory
 
 
 # Analysis settings
 analysis:
   execution:
-    timeout: 120  # seconds
+    timeout: 180  # seconds
     max_memory: 4000  # MB
     sandbox: true
   executor_type: "sandbox"
   output_format: "json"
   timeout_per_analysis: 300
   max_iterations: 3      # Maximum number of analysis cycles per question
-  confidence_threshold: 0.55  # Continue analysis if confidence_threshold > confidence
+  confidence_threshold: 0.85  # Continue analysis if confidence_threshold > confidence
 
 # Execution settings
 execution:
@@ -106,7 +106,7 @@ llm:
   model: "claude-sonnet-4-5"
   temperature: 0.7
   max_tokens: 3000
-  timeout: 120
+  timeout: 180
 
 # Agent-specific configurations
 agents:
@@ -117,8 +117,8 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.8
       max_tokens: 1000
-      timeout: 60
-  
+      timeout: 90
+
   # Question Prioritization Agent
   question_prioritizer:
     llm:
@@ -126,8 +126,8 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.667
       max_tokens: 1000
-      timeout: 60
-  
+      timeout: 180
+
   # Analysis Planning Agent
   analysis_planner:
     llm:
@@ -135,8 +135,8 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 3000
-      timeout: 90
-      
+      timeout: 180
+
   # Analysis Generation Agent
   analysis_generator:
     llm:
@@ -144,7 +144,7 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 12000
-      timeout: 120
+      timeout: 180
 
   # Visualization Planning Agent
   visualization_planner:
@@ -153,7 +153,7 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 3000
-      timeout: 120
+      timeout: 180
 
   # Visualization Generation Agent
   visualization_generator:
@@ -162,7 +162,7 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 12000
-      timeout: 120
+      timeout: 180
 
   # Analysis Evaluation Agent
   evaluator:
@@ -180,7 +180,7 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.3
       max_tokens: 2000
-      timeout: 120
+      timeout: 180
 
   # Report Generation Agent
   reporter:
@@ -189,7 +189,7 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 8000
-      timeout: 120
+      timeout: 180
 
   # Title Generation Agent
   title_generator:
@@ -198,7 +198,7 @@ agents:
       model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 200
-      timeout: 30
+      timeout: 60
 
 # Provider configurations are now dynamically applied at runtime
 # Use the interactive provider selection menu or set --config with overrides
