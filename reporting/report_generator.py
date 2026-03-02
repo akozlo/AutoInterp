@@ -24,6 +24,39 @@ except ImportError:
 from ..core.utils import ensure_directory, get_timestamp, load_yaml, PathResolver, get_comprehensive_log_path
 from ..core.llm_interface import LLMInterface
 
+# Core imports for mechanistic interpretability analyses (matches AnalysisExecutor)
+NOTEBOOK_STANDARD_IMPORTS = """# --- Environment Setup: All dependencies for mechanistic interpretability ---
+import os
+import sys
+import json
+import random
+import logging
+import warnings
+warnings.filterwarnings("ignore", "Can't initialize NVML")
+
+import numpy as np
+import torch
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy
+from scipy import stats
+import sklearn
+from sklearn import metrics, decomposition
+from tqdm.auto import tqdm
+import einops
+
+# Mechanistic interpretability packages
+import transformer_lens
+from transformer_lens import HookedTransformer
+import transformers
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Running on {device}")
+"""
+
+
 class ReportGenerator:
     """
     Creates comprehensive reports from analysis results and visualizations.
@@ -262,16 +295,8 @@ class ReportGenerator:
         filename = self._get_filename_from_title(title)
         
         # Generate the appropriate report format
-        if output_format == "jupyter":
-            report_path = self._generate_jupyter_report(
-                question=question,
-                analysis_results=analysis_results,
-                evaluation_results=evaluation_results,
-                visualizations=visualizations,
-                title=title,
-                output_path=output_dir / f"{filename}.ipynb"
-            )
-        elif output_format == "html":
+        # Note: Jupyter notebook is generated separately via generate_jupyter_notebook in main.py
+        if output_format == "html":
             report_path = await self._generate_html_report(
                 question=question,
                 analysis_results=analysis_results,
@@ -734,134 +759,6 @@ class ReportGenerator:
         
         return str(output_path)
     
-    def _generate_jupyter_report(self,
-                               question: Dict[str, Any],
-                               analysis_results: Dict[str, Any],
-                               evaluation_results: Dict[str, Any],
-                               visualizations: Dict[str, str],
-                               title: str,
-                               output_path: Path) -> str:
-        """
-        Generate a Jupyter notebook report.
-        
-        Args:
-            question: Question dictionary
-            analysis_results: Analysis results dictionary
-            evaluation_results: Evaluation results dictionary
-            visualizations: Dictionary mapping visualization types to file paths
-            title: Report title
-            output_path: Path to save the report
-            
-        Returns:
-            Path to the generated report
-        """
-        # Create a new notebook
-        nb = new_notebook()
-        
-        # Title and metadata
-        nb.cells.append(new_markdown_cell(f"# {title}"))
-        
-        # Question Section
-        question_md = f"""## Question
-
-**Statement**: {question.get('statement', 'No question statement provided')}
-
-"""
-        
-        if "rationale" in question:
-            question_md += f"**Rationale**: {question['rationale']}\n\n"
-        
-        question_md += f"**Initial Confidence**: {question.get('initial_confidence', question.get('confidence', 0.0))}"
-        
-        nb.cells.append(new_markdown_cell(question_md))
-        
-        # Analysis Section
-        analysis_md = f"""## Analysis
-
-### Methodology
-"""
-        
-        if "analysis_plan" in analysis_results:
-            analysis_md += f"{analysis_results['analysis_plan']}\n\n"
-        else:
-            analysis_md += "No analysis plan provided.\n\n"
-        
-        analysis_md += "### Results"
-        
-        nb.cells.append(new_markdown_cell(analysis_md))
-        
-        # Add analysis results as a code cell with JSON output
-        analysis_output = analysis_results.get("results", {})
-        if analysis_output:
-            try:
-                # Format as JSON for the cell output
-                analysis_json = json.dumps(analysis_output, indent=2)
-                code = f"# Analysis Results\nresults = {analysis_json}\nresults"
-                nb.cells.append(new_code_cell(code))
-            except:
-                # Fallback to string representation
-                nb.cells.append(new_markdown_cell(f"```\n{str(analysis_output)}\n```"))
-        else:
-            nb.cells.append(new_markdown_cell("No analysis results available."))
-        
-        
-        # Evaluation Section
-        eval_md = "## Evaluation\n\n"
-        
-        if "evaluation" in evaluation_results:
-            eval_md += f"{evaluation_results['evaluation']}\n\n"
-        elif "explanation" in evaluation_results:
-            eval_md += f"{evaluation_results['explanation']}\n\n"
-        else:
-            eval_md += "No evaluation available.\n\n"
-        
-        eval_md += "### Confidence Update\n\n"
-        
-        final_confidence = question.get("confidence", 0.0)
-        initial_confidence = question.get("initial_confidence", question.get("confidence", 0.0))
-        confidence_impact = evaluation_results.get("confidence_impact", 0.0)
-        
-        # Ensure confidence_impact is a valid number for formatting
-        try:
-            confidence_impact = float(confidence_impact) if confidence_impact is not None else 0.0
-        except (ValueError, TypeError):
-            confidence_impact = 0.0
-        
-        eval_md += f"- Initial confidence: {initial_confidence:.2f}\n"
-        eval_md += f"- Confidence impact: {confidence_impact:+.2f}\n"
-        eval_md += f"- Final confidence: {final_confidence:.2f}\n"
-        
-        nb.cells.append(new_markdown_cell(eval_md))
-        
-        # Conclusion Section
-        conclusion_md = "## Conclusion\n\n"
-        
-        if "conclusion" in evaluation_results:
-            conclusion_md += f"{evaluation_results['conclusion']}\n\n"
-        elif "summary" in evaluation_results:
-            conclusion_md += f"{evaluation_results['summary']}\n\n"
-        else:
-            # Generate a simple conclusion based on whether the question was supported
-            supports = evaluation_results.get("supports_question", None)
-            if supports is not None:
-                if supports:
-                    conclusion_md += "The analysis **supports** the question.\n\n"
-                else:
-                    conclusion_md += "The analysis **does not support** the question.\n\n"
-            else:
-                conclusion_md += "No conclusion available.\n\n"
-        
-        nb.cells.append(new_markdown_cell(conclusion_md))
-        
-        # Footer
-        nb.cells.append(new_markdown_cell("---\n*This report was automatically generated by the AutoInterp Agent Framework.*"))
-        
-        # Save the notebook
-        with open(output_path, "w") as f:
-            nbformat.write(nb, f)
-        
-        return str(output_path)
-    
     async def _generate_html_report(self,
                             question: Union[str, Dict[str, Any]],
                             analysis_results: Dict[str, Any],
@@ -1167,15 +1064,8 @@ class ReportGenerator:
         output_dir = self.path_resolver.ensure_path("reports")
         
         # Generate the appropriate report format
-        if output_format == "jupyter":
-            report_path = self._generate_summary_jupyter(
-                task_results=task_results,
-                questions=questions,
-                task_config=task_config,
-                title=title,
-                output_path=output_dir / f"{self._sanitize_filename(title)}.ipynb"
-            )
-        elif output_format == "html":
+        # Note: Jupyter format for summary reports is not supported; falls through to markdown
+        if output_format == "html":
             report_path = self._generate_summary_html(
                 task_results=task_results,
                 questions=questions,
@@ -1311,161 +1201,6 @@ class ReportGenerator:
         # Save the report
         with open(output_path, "w") as f:
             f.write("\n".join(report_content))
-        
-        return str(output_path)
-    
-    def _generate_summary_jupyter(self,
-                                task_results: Dict[str, Any],
-                                questions: List[Dict[str, Any]],
-                                task_config: Dict[str, Any],
-                                title: str,
-                                output_path: Path) -> str:
-        """
-        Generate a Jupyter notebook summary report.
-        
-        Args:
-            task_results: Task execution results
-            questions: List of question dictionaries
-            task_config: Task configuration dictionary
-            title: Report title
-            output_path: Path to save the report
-            
-        Returns:
-            Path to the generated report
-        """
-        # Create a new notebook
-        nb = new_notebook()
-        
-        # Title and metadata
-        nb.cells.append(new_markdown_cell(f"# {title}"))
-        
-        # Task Information
-        task_info_md = f"""## Task Information
-**Task**: Interpretability Study
-"""
-        
-        if "description" in task_config:
-            task_info_md += f"**Description**: {task_config['description']}\n\n"
-        
-        if "model" in task_config:
-            model_info = task_config["model"]
-            task_info_md += f"**Model**: {model_info.get('name', 'Unknown')}\n\n"
-        
-        nb.cells.append(new_markdown_cell(task_info_md))
-        
-        # Summary of Findings
-        if "reporting" in task_results and "summary" in task_results["reporting"]:
-            nb.cells.append(new_markdown_cell("## Summary of Findings"))
-            nb.cells.append(new_markdown_cell(task_results["reporting"]["summary"]))
-        
-        # Questions Overview
-        nb.cells.append(new_markdown_cell("## Questions Overview"))
-        
-        if questions:
-            hyp_table_md = "| # | Question | Initial Confidence | Final Confidence | Supported |\n"
-            hyp_table_md += "|---|-----------|-------------------|-----------------|-----------|\n"
-            
-            for i, hyp in enumerate(questions):
-                # Extract info
-                statement = hyp.get("statement", "No statement")
-                initial_confidence = hyp.get("initial_confidence", hyp.get("original_confidence", 0.0))
-                final_confidence = hyp.get("confidence", 0.0)
-                supported = "" if hyp.get("supported", None) else "L" if hyp.get("supported", None) is False else "S"
-                
-                # For display in table, truncate statement but keep full version in notebook
-                display_statement = statement[:80] + "..." if len(statement) > 80 else statement
-                
-                hyp_table_md += f"| {i+1} | {display_statement} | {initial_confidence:.2f} | {final_confidence:.2f} | {supported} |\n"
-            
-            nb.cells.append(new_markdown_cell(hyp_table_md))
-            # Add visualization code for confidence changes
-            if len(questions) > 0:
-                conf_viz_code = """
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Extract data from questions
-statements = []
-initial_confidences = []
-final_confidences = []
-supported = []
-
-for hyp in questions:
-    statements.append(hyp.get("statement", "No statement")[:40] + "..." if len(hyp.get("statement", "")) > 40 else hyp.get("statement", "No statement"))
-    initial_confidences.append(hyp.get("initial_confidence", hyp.get("original_confidence", 0.0)))
-    final_confidences.append(hyp.get("confidence", 0.0))
-    supported.append(hyp.get("supported", None))
-
-# Create visualization
-fig, ax = plt.subplots(figsize=(10, 6))
-x = np.arange(len(statements))
-width = 0.35
-
-# Plot bars
-bars1 = ax.bar(x - width/2, initial_confidences, width, label='Initial Confidence', color='lightblue')
-bars2 = ax.bar(x + width/2, final_confidences, width, label='Final Confidence', color='orange')
-
-# Add labels and legend
-ax.set_xlabel('Question')
-ax.set_ylabel('Confidence')
-ax.set_title('Confidence Change by Question')
-ax.set_xticks(x)
-ax.set_xticklabels(statements, rotation=45, ha='right')
-ax.legend()
-
-# Add supported/not supported indicators
-for i, (supp, bar) in enumerate(zip(supported, bars2)):
-    color = 'green' if supp else 'red' if supp is False else 'gray'
-    symbol = '' if supp else '' if supp is False else '?'
-    ax.annotate(symbol, xy=(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05),
-                xytext=(0, 3), textcoords="offset points", ha='center', va='bottom',
-                color=color, fontsize=12, weight='bold')
-
-plt.tight_layout()
-plt.show()
-"""
-                nb.cells.append(new_code_cell(conf_viz_code))
-        else:
-            nb.cells.append(new_markdown_cell("No questions were investigated."))
-        
-        # Detailed Question Results
-        nb.cells.append(new_markdown_cell("## Detailed Question Results"))
-        
-        if questions:
-            for i, hyp in enumerate(questions):
-                hyp_detail_md = f"### Question {i+1}: {hyp.get('statement', 'No statement')}\n\n"
-                
-                if "rationale" in hyp:
-                    hyp_detail_md += f"**Rationale**: {hyp['rationale']}\n\n"
-                
-                hyp_detail_md += f"**Initial Confidence**: {hyp.get('initial_confidence', hyp.get('original_confidence', 0.0))}\n"
-                hyp_detail_md += f"**Final Confidence**: {hyp.get('confidence', 0.0)}\n"
-                hyp_detail_md += f"**Supported**: {hyp.get('supported', 'Unknown')}\n\n"
-                
-                if "evidence" in hyp:
-                    hyp_detail_md += f"**Evidence**:\n\n"
-                    
-                    if isinstance(hyp["evidence"], list):
-                        for evidence in hyp["evidence"]:
-                            hyp_detail_md += f"- {evidence}\n"
-                    else:
-                        hyp_detail_md += hyp["evidence"] + "\n"
-                
-                nb.cells.append(new_markdown_cell(hyp_detail_md))
-        else:
-            nb.cells.append(new_markdown_cell("No detailed question results available."))
-        
-        # Open Questions
-        if "reporting" in task_results and "open_questions" in task_results["reporting"]:
-            nb.cells.append(new_markdown_cell("## Open Questions"))
-            nb.cells.append(new_markdown_cell(task_results["reporting"]["open_questions"]))
-        
-        # Footer
-        nb.cells.append(new_markdown_cell("---\n*This report was automatically generated by the AutoInterp Agent Framework.*"))
-        
-        # Save the notebook
-        with open(output_path, "w") as f:
-            nbformat.write(nb, f)
         
         return str(output_path)
     
@@ -1758,7 +1493,7 @@ plt.show()
             }
         }
 
-        # --- 2. Markdown Header & Intro ---
+        # --- 2. Markdown Header & Intro (rich narrative sections) ---
         display_title = title or "AutoInterp Analysis Report"
         raw_text = question.get("text", str(question)) if isinstance(question, dict) else str(question)
         
@@ -1778,65 +1513,117 @@ plt.show()
             else:
                 rationale_content = remaining.strip()
 
-        # Add Header Cells
-        nb.cells.append(nbformat.v4.new_markdown_cell(f"# {display_title}"))
-        nb.cells.append(nbformat.v4.new_markdown_cell(f"## Research Question\n{q_content}"))
-        
+        # Add Header Cells with rich documentation
+        nb.cells.append(nbformat.v4.new_markdown_cell(
+            f"# {display_title}\n\n"
+            "This notebook provides a **self-contained, reproducible** research report. "
+            "Run all cells from top to bottom to reproduce the full analysis."
+        ))
+        nb.cells.append(nbformat.v4.new_markdown_cell(
+            "## Hypothesis\n\n"
+            "**Research Question:**\n\n"
+            f"{q_content}"
+        ))
         if rationale_content:
-            nb.cells.append(nbformat.v4.new_markdown_cell(f"### Rationale\n{rationale_content}"))
+            nb.cells.append(nbformat.v4.new_markdown_cell(
+                f"### Rationale\n{rationale_content}"
+            ))
         if procedure_content:
-            nb.cells.append(nbformat.v4.new_markdown_cell(f"### Proposed Procedure\n{procedure_content}"))
+            nb.cells.append(nbformat.v4.new_markdown_cell(
+                f"### Proposed Procedure\n{procedure_content}"
+            ))
         
-        # Experiment Setup Context
-        intro_md = "## Experiment Setup\nThis notebook documents the step-by-step analysis performed by the AutoInterp agent."
+        # Experiment Setup section with configuration
+        setup_md = (
+            "## Experiment Setup\n\n"
+            "This section loads all dependencies and configures the environment. "
+            "**Rationale:** Mechanistic interpretability requires torch, transformer_lens, and related packages. "
+            "**Alternatives:** Use a conda environment or Docker for isolation.\n\n"
+            "**Configuration:**"
+        )
         if task_config:
-            intro_md += "\n\n**Configuration:**\n"
             if "model" in task_config:
-                 intro_md += f"- **Model:** `{task_config['model'].get('name', 'Unknown')}`\n"
+                setup_md += f"\n- **Model:** `{task_config['model'].get('name', 'Unknown')}`"
             if "dataset" in task_config:
-                 intro_md += f"- **Dataset:** `{task_config.get('dataset', 'Unknown')}`\n"
-        nb.cells.append(nbformat.v4.new_markdown_cell(intro_md))
+                setup_md += f"\n- **Dataset:** `{task_config.get('dataset', 'Unknown')}`"
+        nb.cells.append(nbformat.v4.new_markdown_cell(setup_md))
         
         # --- 3. Dynamic Environment Setup ---
         # (Passes analysis results to scan for imports like sklearn/cv2/wandb)
         nb.cells.append(self._create_setup_cell(analysis_results))
         
-        # --- 4. Process Analysis Steps ---
+        # --- 4. Process Analysis Steps (1:1 mapping to executed scripts) ---
+        nb.cells.append(nbformat.v4.new_markdown_cell(
+            "## Analysis Steps\n\n"
+            "The following cells replicate the analysis performed by the AutoInterp agent. "
+            "Each step maps 1:1 to the underlying analysis scripts. "
+            "**Rationale:** Presenting modular code chunks improves clarity and debuggability. "
+            "**Alternatives:** Run steps independently to explore intermediate results."
+        ))
         analyses = analysis_results.get("analyses", [])
         successful_steps = [a for a in analyses if a.get("status") == "success"]
         if not successful_steps and analyses:
             successful_steps = analyses  # Fallback to showing everything if no explicit success
         
         for i, step in enumerate(successful_steps, 1):
-            raw_code = step.get("code", "")
-            if not raw_code.strip(): continue
+            # Load code from step or script_path; fallback to final attempt from disk
+            raw_code = self._get_analysis_code(step, step_index=i)
+            if not raw_code.strip():
+                continue
 
             # A. Sanitize (Fix null/true/false artifacts)
             clean_code = self._sanitize_code(raw_code)
 
-            # B. Generate Explanation (Context + Alternatives)
+            # B. Generate Explanation (Rationale + Alternatives)
             raw_result = step.get("results", "")
             result_output = raw_result.get("stdout", "") if isinstance(raw_result, dict) else str(raw_result)
             
             explanation_md = await self._generate_step_explanation(i, clean_code, result_output)
             nb.cells.append(nbformat.v4.new_markdown_cell(explanation_md))
 
-            # C. Modularize (Split code into Imports -> Helpers -> Logic)
+            # C. Modularize into granular chunks with LLM-generated per-chunk descriptions
             code_chunks = self._split_code_into_logical_chunks(clean_code)
-            
+
             for chunk in code_chunks:
-                # Add mini-headers for clarity
-                if chunk['title'] and chunk['title'] != "Analysis Logic":
-                     nb.cells.append(nbformat.v4.new_markdown_cell(f"**{chunk['title']}**"))
-                
-                # Add the runnable code
-                nb.cells.append(nbformat.v4.new_code_cell(chunk['content']))
+                desc = await self._generate_chunk_description(chunk["content"], chunk["title"])
+                chunk_md = f"**{chunk['title']}**\n\n{desc}"
+                nb.cells.append(nbformat.v4.new_markdown_cell(chunk_md))
+
+                content = chunk["content"]
+                if chunk["title"] != "Imports & Dependencies" and content.strip():
+                    header_comment = f"# Step {i}: {chunk['title']}\n"
+                    content = header_comment + content
+                nb.cells.append(nbformat.v4.new_code_cell(content))
             
             # D. Output Summary
             if result_output:
                 trunc_len = 1000
                 trunc_out = result_output[:trunc_len] + f"\n... [Output Truncated]" if len(result_output) > trunc_len else result_output
                 nb.cells.append(nbformat.v4.new_markdown_cell(f"**Verifiable Output:**\n```text\n{trunc_out}\n```"))
+
+            # E. Visualization for this analysis step (lookup by analysis_name, not step index)
+            analysis_name = self._extract_analysis_name(step, i)
+            if analysis_name in visualizations:
+                viz_code = self._load_visualization_code(analysis_name)
+                if viz_code:
+                    clean_viz = self._sanitize_code(viz_code)
+                    # Prepend note: viz is self-contained, does not assume step numbering
+                    preamble = "# Self-contained visualization: reproduces analysis results inline.\n"
+                    preamble += "# Does not depend on step numbers or prior cell variable names.\n\n"
+                    clean_viz = preamble + clean_viz
+                    if "plt.show()" not in clean_viz and "fig.show()" not in clean_viz and "display(" not in clean_viz:
+                        clean_viz = clean_viz.rstrip() + "\n\nplt.show()  # Display figure inline"
+                    nb.cells.append(nbformat.v4.new_markdown_cell(
+                        f"### Visualization for Step {i}\n\n"
+                        f"*This visualization corresponds to the analysis above. "
+                        f"Run the cell to regenerate the figure (self-contained; no step numbering assumed).*"
+                    ))
+                    nb.cells.append(nbformat.v4.new_code_cell(clean_viz))
+                else:
+                    nb.cells.append(nbformat.v4.new_markdown_cell(
+                        f"### Visualization for Step {i}\n\n"
+                        f"*Visualization script not found. Re-run the pipeline to regenerate.*"
+                    ))
 
         # --- 5. Evaluation & Conclusion ---
         conclusion = evaluation_results.get("conclusion", "Analysis Complete")
@@ -1852,25 +1639,8 @@ plt.show()
 """
         nb.cells.append(nbformat.v4.new_markdown_cell(eval_md))
         
-        # --- 6. Visualizations ---
-        if visualizations:
-            nb.cells.append(nbformat.v4.new_markdown_cell("## Generated Visualizations"))
-            notebook_dir = output_path.parent.resolve()
-
-            for viz_name, viz_path in visualizations.items():
-                try:
-                    # Attempt relative path for portability
-                    viz_abs_path = Path(viz_path).resolve()
-                    try:
-                        rel_path = os.path.relpath(viz_abs_path, notebook_dir)
-                    except ValueError:
-                        rel_path = str(viz_abs_path)
-                        
-                    nb.cells.append(nbformat.v4.new_markdown_cell(f"### {viz_name}\n![{viz_name}]({rel_path})"))
-                except Exception:
-                    nb.cells.append(nbformat.v4.new_markdown_cell(f"**{viz_name}**: Saved at `{viz_path}`"))
-
-        # --- 7. Save File ---
+        # --- 6. Save File ---
+        # (Visualizations are interleaved with analysis steps above)
         with open(output_path, 'w', encoding='utf-8') as f:
             nbformat.write(nb, f)
             
@@ -1930,28 +1700,61 @@ plt.show()
         code = re.sub(r'\n+(def|class) ', r'\n\n\n\1 ', code)
         return code.strip()
 
+    MAX_CHUNK_LINES = 25  # Split large blocks for finer granularity
+
+    async def _generate_chunk_description(self, chunk_content: str, title: str) -> str:
+        """
+        Generate a brief description for a code chunk using the LLM.
+        Falls back to title if LLM unavailable.
+        """
+        section_key = "notebook_chunk_descriptor"
+        if not self.llm_interface or not hasattr(self, "reporter_prompts") or section_key not in self.reporter_prompts:
+            if chunk_content.strip().startswith("#"):
+                return chunk_content.split("\n")[0].replace("#", "").strip()
+            return title
+
+        try:
+            prompt_config = self.reporter_prompts[section_key]
+            system_prompt = prompt_config.get("system_prompt", "Describe this code briefly.")
+            user_prompt_template = prompt_config.get("user_prompt", "{chunk_content}")
+            user_prompt = user_prompt_template.format(chunk_content=chunk_content[:2000])
+            response = await self.llm_interface.generate(
+                prompt=user_prompt,
+                system_message=system_prompt,
+                agent_name="reporter",
+            )
+            return response.strip()[:2000] if response else title
+        except Exception as e:
+            if hasattr(self, "logger"):
+                self.logger.warning(f"Chunk description generation failed: {e}")
+            return title
+
     def _split_code_into_logical_chunks(self, code: str) -> List[Dict[str, str]]:
-        """Splits script into imports, definitions, and execution chunks."""
+        """
+        Splits script into granular logical chunks for step-by-step explanation.
+        Keeps chunks small (max ~25 lines) and adds descriptive titles.
+        """
         import re
         chunks = []
         lines = code.split('\n')
-        
+
         # Extract Imports
         import_lines = [l for l in lines if l.strip().startswith(('import ', 'from '))]
         other_lines = [l for l in lines if not l.strip().startswith(('import ', 'from '))]
-        
+
         if import_lines:
             chunks.append({"type": "code", "title": "Imports & Dependencies", "content": "\n".join(import_lines)})
-            
+
         remaining_code = "\n".join(other_lines).strip()
-        
-        # Split by logical blocks
+
+        # Primary split: def, class, # headers, if __name__
         raw_sections = re.split(r'\n{2,}(?=# |def |class |if __name__)', remaining_code)
-        
+
         for section in raw_sections:
             section = section.strip()
-            if not section: continue
-            
+            if not section:
+                continue
+
             title = "Analysis Logic"
             if section.startswith("def "):
                 title = f"Define Helper: `{section.split('(')[0].replace('def ', '')}`"
@@ -1961,10 +1764,127 @@ plt.show()
                 title = section.split('\n')[0].replace("#", "").strip()
             elif "plt." in section or "fig." in section:
                 title = "Visualization"
-            
-            chunks.append({"type": "code", "title": title, "content": section})
-            
+
+            # Further split large sections for granularity
+            section_lines = section.split('\n')
+            if len(section_lines) <= self.MAX_CHUNK_LINES:
+                chunks.append({"type": "code", "title": title, "content": section})
+            else:
+                # Split by double newlines or by common logical boundaries
+                sub_sections = re.split(r'\n{2,}', section)
+                for sub in sub_sections:
+                    sub = sub.strip()
+                    if not sub:
+                        continue
+                    sub_lines = sub.split('\n')
+                    if len(sub_lines) <= self.MAX_CHUNK_LINES:
+                        chunks.append({"type": "code", "title": title, "content": sub})
+                    else:
+                        for idx in range(0, len(sub_lines), self.MAX_CHUNK_LINES):
+                            block = "\n".join(sub_lines[idx : idx + self.MAX_CHUNK_LINES])
+                            if block.strip():
+                                chunks.append({"type": "code", "title": f"{title} (part)", "content": block})
+
         return chunks
+
+    def _extract_analysis_name(self, step: Dict[str, Any], step_index: int) -> str:
+        """
+        Extract analysis name (e.g. 'analysis_1') from step for viz lookup.
+        Does NOT assume step_index equals analysis number—derives from script_path.
+        Falls back to step_index only when path cannot be parsed.
+        """
+        script_path = step.get("script_path", "")
+        if script_path:
+            # Match analysis_N in path (e.g. .../analysis_scripts/analysis_3/attempt_2/...)
+            match = re.search(r"analysis_(\d+)", str(script_path))
+            if match:
+                return f"analysis_{match.group(1)}"
+        return f"analysis_{step_index}"
+
+    def _get_analysis_code(self, step: Dict[str, Any], step_index: Optional[int] = None) -> str:
+        """
+        Get analysis code from step. Prefers script_path (the actual executed script).
+        Falls back to resolving the final attempt from disk when script_path is missing
+        or the file does not exist (e.g. project moved). Ensures the FINAL attempt
+        script is replicated, not failed intermediate attempts.
+        """
+        code = step.get("code", "").strip()
+        if code:
+            return code
+        script_path = step.get("script_path", "")
+        if script_path and Path(script_path).exists():
+            try:
+                with open(script_path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception as e:
+                self.logger.warning(f"Could not read analysis script at {script_path}: {e}")
+        # Fallback: resolve final attempt from disk (analysis_N/attempt_M/analysis_*.py)
+        if step_index is not None:
+            return self._resolve_final_script_from_disk(step_index)
+        return ""
+
+    def _resolve_final_script_from_disk(self, step_index: int) -> str:
+        """
+        Resolve the final (highest) attempt script from the analysis_scripts directory.
+        Uses analysis_{n}/attempt_{m}/analysis_*.py - takes highest attempt number.
+        """
+        try:
+            analysis_scripts_dir = self.path_resolver.get_path("analysis_scripts")
+            analysis_dir = analysis_scripts_dir / f"analysis_{step_index}"
+            if not analysis_dir.exists():
+                return ""
+            attempt_dirs = []
+            for item in analysis_dir.iterdir():
+                if item.is_dir() and item.name.startswith("attempt_"):
+                    try:
+                        attempt_num = int(item.name.split("_")[1])
+                        attempt_dirs.append((attempt_num, item))
+                    except (ValueError, IndexError):
+                        continue
+            if not attempt_dirs:
+                return ""
+            attempt_dirs.sort(key=lambda x: x[0])
+            highest_attempt_dir = attempt_dirs[-1][1]
+            # Find analysis_*.py (executed script) - not analysis_generator_*.txt
+            for f in highest_attempt_dir.iterdir():
+                if f.is_file() and f.name.startswith("analysis_") and f.suffix == ".py":
+                    with open(f, "r", encoding="utf-8") as fp:
+                        return fp.read()
+        except Exception as e:
+            self.logger.warning(f"Could not resolve final script from disk for step {step_index}: {e}")
+        return ""
+
+    def _load_visualization_code(self, viz_name: str) -> Optional[str]:
+        """
+        Load the FINAL successful visualization Python code from disk. Prefers
+        retry scripts (later attempts) over initial attempts. Scripts are named
+        visualization_{viz_name}_{timestamp}.py or ..._retry{N}.py.
+        """
+        viz_dir = self.path_resolver.ensure_path("visualizations")
+        if not viz_dir.exists():
+            return None
+        pattern = f"visualization_{viz_name}_*.py"
+        all_matches = list(viz_dir.glob(pattern))
+        if not all_matches:
+            return None
+
+        def sort_key(p: Path) -> tuple:
+            """Prefer retry scripts (later attempts); then by mtime."""
+            name = p.name
+            # Extract retry number: visualization_analysis_1_xxx_retry2.py -> 2
+            retry_match = re.search(r"_retry(\d+)\.py$", name)
+            retry_num = int(retry_match.group(1)) if retry_match else 0
+            # (has_retry, retry_num, -mtime) so retries come first, higher retry first
+            has_retry = 1 if "_retry" in name else 0
+            return (has_retry, retry_num, -p.stat().st_mtime)
+
+        matches = sorted(all_matches, key=sort_key)
+        try:
+            with open(matches[0], "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            self.logger.warning(f"Could not read visualization script {matches[0]}: {e}")
+        return None
 
     def _get_dynamic_requirements(self, analysis_results: Dict[str, Any]) -> List[str]:
         """Scans code to find necessary pip packages."""
@@ -1977,7 +1897,7 @@ plt.show()
         STDLIB = {"os", "sys", "json", "math", "re", "time", "typing", "pathlib", "numpy", "pandas", "torch"}
         
         analyses = analysis_results.get("analyses", [])
-        all_code = "\n".join([a.get("code", "") for a in analyses])
+        all_code = "\n".join([self._get_analysis_code(a, step_index=i + 1) for i, a in enumerate(analyses)])
         matches = re.findall(r'^\s*(?:from|import)\s+(\w+)', all_code, re.MULTILINE)
         
         found = {"transformer_lens", "torch", "einops", "jaxtyping"} # Core defaults
@@ -1987,15 +1907,13 @@ plt.show()
         return sorted(list(found))
 
     def _create_setup_cell(self, analysis_results: Dict[str, Any]) -> nbformat.NotebookNode:
-        """Creates the installation cell."""
+        """
+        Creates the environment setup cell with ALL necessary imports for mechanistic
+        interpretability. Ensures the notebook is self-contained and runnable.
+        """
         requirements = self._get_dynamic_requirements(analysis_results)
-        content = (
-            "# --- Environment Setup ---\n"
-            f"!pip install {' '.join(requirements)}\n\n"
-            "import torch\nimport numpy as np\nimport pandas as pd\n"
-            "device = 'cuda' if torch.cuda.is_available() else 'cpu'\n"
-            "print(f'Running on {device}')"
-        )
+        pip_line = f"# !pip install {' '.join(requirements)}  # Uncomment if packages are missing\n\n"
+        content = pip_line + NOTEBOOK_STANDARD_IMPORTS
         return new_code_cell(content)
     
     def _get_filename_from_title(self, title: str) -> str:

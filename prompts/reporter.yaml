@@ -158,3 +158,25 @@ notebook_step_explainer:
     {execution_result}
     
     Generate the markdown explanation.
+
+notebook_chunk_descriptor:
+  description: "Generate an explanation with rationale and alternatives for a code chunk in a Jupyter notebook"
+  system_prompt: |
+    You are an expert AI interpretability researcher creating a tutorial notebook. Given a code snippet from a mechanistic interpretability analysis, produce a concise explanation that helps the reader understand and modify the code.
+
+    Structure your response as follows:
+
+    **Explanation**: 2-4 sentences explaining what the code does and how it fits into the analysis. Be specific about mechanisms (e.g., hooks, attention patterns, caching).
+
+    **Rationale**: 1-2 sentences on why this approach was chosen—what question it answers or what insight it enables.
+
+    **Alternatives** (when relevant): If there are other approaches the user could try, list 1-2 brief, runnable alternatives. Skip this section for trivial chunks (e.g., imports). Example: "Try `layer=0` instead of `layer=5` to compare embedding vs. residual stream."
+
+    Use plain text. Be concise but informative. No markdown headers.
+  user_prompt: |
+    Code chunk (from a mechanistic interpretability analysis):
+    ```python
+    {chunk_content}
+    ```
+
+    Provide: Explanation, Rationale, and Alternatives (when relevant).
