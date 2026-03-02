@@ -36,7 +36,7 @@ introduction:
 
     Literature Pack (use to ground related work):
     {literature_pack}
-    
+
     Write a compelling Introduction that follows the hook-gap-intervention structure described in the system prompt. Each paragraph should be clearly focused on its purpose and flow naturally into the next. No formatting. Just plain old txt.
 
 
@@ -62,7 +62,7 @@ methodology_summary:
 
     Literature Pack (use to ground related work):
     {literature_pack}
-    
+
     Note that the study is divided into several analyses. You should begin your methodology write-up with one or two paragraphs that summarize the overall approach and then go into detail about the specific analyses. Do not use extensive markdown formating, but note each analysis as its one subsection with its heading in italics (e.g. *Analysis 1*). Do not put any heading like "Methodology" at the very top.
     For each analysis, include an equation if it is relevant. You should use LaTeX for the equations.
     The methodology should be written in a way that is easy to understand but detailed and specific enough to replicate. Do not describe the results! Just the methodology.
@@ -88,7 +88,7 @@ results_synthesis:
 
     Literature Pack (use to ground related work):
     {literature_pack}
-    
+
     Note that the study is divided into several analyses. You should write up the results of ALL the analyses, but present them one-by-one. Do not use extensive markdown formating, but note each analysis as its one subsection with its heading in bold (e.g. **Analysis 1**). Do not put any heading like "Results" at the very top.
     
     For each analysis, also include all relevant figures beneath the write-up for that specific analysis. You can tell which figures go with which analysis by their prefix (e.g. a1_ for Analysis 1, a2_ for Analysis 2). Here is a list of all the images to be embedded: {visualization_files}. They should all be called using this relative path format: ![Analysis n - Description](../visualizations/FILENAME) where FILENAME is replaced with each actual filename from the list.
@@ -114,7 +114,7 @@ discussion_and_conclusion:
 
     Literature Pack (use to ground related work):
     {literature_pack}
-    
+
     Clearly state the best answer to the research question, and how strong the evidence is for it. If results are inconclusive, state that. Summarize the key implications. Note limitations and suggest directions for future research. Do not use markdown formatting. Just several paragraphs of text.
 
 abstract:
@@ -139,6 +139,37 @@ abstract:
 
     Literature Pack (use to ground related work):
     {literature_pack}
-    
+
     Keep it concise (5-8 sentences total) but comprehensive. This should allow a reader to quickly understand the study's purpose, approach, findings, and significance. It should be one paragraph, and have no heading. It should read like an academic abstract.
+
+notebook_step_explainer:
+  description: "Generate a tutorial-style explanation with runnable alternatives for a notebook step."
+  system_prompt: |
+    You are an expert AI interpretability researcher creating a tutorial. 
+    Your goal is to explain a code step to a user so they can understand the logic and try variations.
+
+    Structure your response in three specific Markdown sections:
+
+    ### 1. The Logic
+    Briefly explain *what* this code does and *why* it is necessary for the analysis. Focus on the mechanism (e.g., "We hook into layer 5 to extract residual stream vectors...").
+
+    ### 2. Insight
+    If the output provided shows a result, interpret it. What does it imply about the model's behavior?
+
+    ### 3. Try It Yourself (Alternatives)
+    Suggest 2-3 specific, runnable changes the user can make to this code block to test different hypotheses. 
+    Format this as a bulleted list. 
+    (Example: "Change `layer = 5` to `layer = 0` to see how the embedding layer compares.")
   
+  user_prompt: |
+    **Step Context**: Step {step_index} of the analysis plan.
+    
+    **Code Executed**:
+    ```python
+    {code_content}
+    ```
+    
+    **Result/Output**:
+    {execution_result}
+    
+    Generate the markdown explanation.

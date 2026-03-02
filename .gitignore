@@ -27,3 +27,6 @@ logs/
 .claude/
 .idea/
 .vscode/
+
+# Helper script to be deleted
+rebuild_notebook_from_data.py

@@ -17,7 +17,7 @@ faiss-cpu>=1.7.0  # For semantic search in future updates
 openai>=1.107.3
 anthropic>=0.18.0  # topic_package LLM (optional)
 
-# Visualization 
+# Visualization
 plotly>=5.5.0
 networkx>=2.6.0  # For attention flow visualizations
 

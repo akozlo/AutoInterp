@@ -39,10 +39,10 @@ model:
 # Analysis settings
 analysis:
   execution:
-    timeout: 120  # seconds
+    timeout: 180  # seconds
     max_memory: 4000  # MB
-    sandbox: false
-  executor_type: "local"
+    sandbox: true
+  executor_type: "sandbox"
   output_format: "json"
   timeout_per_analysis: 300
   max_iterations: 3      # Maximum number of analysis cycles per question
@@ -50,7 +50,7 @@ analysis:
 
 # Execution settings
 execution:
-  mode: "local"
+  mode: "sandbox"
   timeout: 300
   max_retries: 5
   max_memory_mb: 4096
@@ -108,73 +108,73 @@ output_directories:
 
 # Default LLM configuration
 llm:
-  provider: "openrouter"
-  model: "anthropic/claude-sonnet-4.6"
+  provider: "anthropic"
+  model: "claude-sonnet-4-5"
   temperature: 0.7
   max_tokens: 3000
-  timeout: 120
+  timeout: 180
 
 # Agent-specific configurations
 agents:
   # Question Generation Agent
   question_generator:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.8
       max_tokens: 1000
-      timeout: 60
-  
+      timeout: 90
+
   # Question Prioritization Agent
   question_prioritizer:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.667
       max_tokens: 1000
-      timeout: 60
-  
+      timeout: 180
+
   # Analysis Planning Agent
   analysis_planner:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 3000
-      timeout: 90
-      
+      timeout: 180
+
   # Analysis Generation Agent
   analysis_generator:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 12000
-      timeout: 120
+      timeout: 180
 
   # Visualization Planning Agent
   visualization_planner:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 3000
-      timeout: 120
+      timeout: 180
 
   # Visualization Generation Agent
   visualization_generator:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 12000
-      timeout: 120
+      timeout: 180
 
   # Analysis Evaluation Agent
   evaluator:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 31000
       timeout: 180
@@ -182,29 +182,29 @@ agents:
   # Visualization Evaluation Agent
   visualization_evaluator:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.3
       max_tokens: 2000
-      timeout: 120
+      timeout: 180
 
   # Report Generation Agent
   reporter:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 8000
-      timeout: 120
+      timeout: 180
 
   # Title Generation Agent
   title_generator:
     llm:
-      provider: "openrouter"
-      model: "anthropic/claude-sonnet-4.6"
+      provider: "anthropic"
+      model: "claude-sonnet-4-5"
       temperature: 0.7
       max_tokens: 200
-      timeout: 30
+      timeout: 60
 
 # Provider configurations are now dynamically applied at runtime
 # Use the interactive provider selection menu or set --config with overrides

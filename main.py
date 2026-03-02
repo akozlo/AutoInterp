@@ -508,7 +508,7 @@ async def prioritize_questions(
             import shutil
             shutil.copy(raw_questions_path, prioritized_path)
             print(f"[AUTOINTERP] Copied raw questions to {prioritized_path}")
-    
+
     # Read and print prioritized question
     if prioritized_path.exists():
         try:
@@ -541,11 +541,11 @@ async def prioritize_questions(
                     config["title"] = extracted_title
                     
                     print(f"[AUTOINTERP] Setting new project ID: {new_project_id}")
-                    
+
                     # Immediately rename the project (we'll do it properly later)
                     old_project_id = config.get("project_id", "working_project")
                     config["project_id"] = new_project_id
-            
+
         except Exception as e:
             print(f"[AUTOINTERP] Error reading prioritized question: {e}")
             raise ValueError("Failed to read prioritized question")
@@ -1921,7 +1921,7 @@ async def generate_report(
         conclusion_type = "concluded"
         conclusion_text = "CONCLUDED"
 
-    
+
     print(f"[AUTOINTERP] Final conclusion: Investigation is {conclusion_text}")
     print(f"[AUTOINTERP] Final confidence: {final_confidence:.2f}")
     
@@ -1967,10 +1967,10 @@ async def generate_report(
             visualizations=visualizations,
             title=None  # Let report generator generate the title
         )
-        
+
         logger.info(f"Generated report at {report_path}")
         print(f"[AUTOINTERP] Generated comprehensive report at {report_path}")
-        
+
         return {
             "report_path": report_path,
             "conclusion": conclusion_type,
@@ -1979,7 +1979,7 @@ async def generate_report(
     except Exception as e:
         logger.error(f"Error generating report: {str(e)}")
         print(f"[AUTOINTERP] Error generating report: {str(e)}")
-        
+
         # Create a simple markdown report as fallback
         simple_report = f"# Interpretability Report: {task_name}\n\n"
         simple_report += f"## Question\n"
@@ -2048,7 +2048,7 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
     context_pack_active_question = None
 
     try:
-        # Context pack (optional): seed + forward/backward -> 3 papers -> one question; 若开启则替代后面的「问题生成+选题」
+        # Context pack (optional): seed + forward/backward -> 3 papers -> one question
         ctx_cfg = config.get("context_pack", {}) or {}
         if ctx_cfg.get("enabled", False):
             print("[AUTOINTERP] Context pack enabled: building 3-paper pack and generating question...")
@@ -2102,7 +2102,7 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                 traceback.print_exc()
                 print("[AUTOINTERP] Falling back to normal question generation.")
 
-        # 1. Question Generation（若已用 context pack 生成问题则跳过）
+        # 1. Question Generation
         if not use_context_pack_question:
             await generate_questions(
                 llm_interface=framework["llm_interface"],
@@ -2248,7 +2248,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     topic_parser.add_argument("--force", action="store_true", help="Recompute even if outputs exist")
     topic_parser.set_defaults(command="topic-mining")
 
-    # context-pack: seed + forward/backward -> 3 papers -> PDFs + manifest -> optional LLM question (会后构想)
+    # context-pack: seed + forward/backward -> 3 papers -> PDFs + manifest -> optional LLM question
     ctx_parser = subparsers.add_parser("context-pack", help="Build 3-paper context pack (seed + citing + cited), PDFs + manifest, optional research question")
     ctx_parser.add_argument("--output-dir", default=None, help="Output directory; default: auto from generated question (projects/<slug>_<timestamp>/questions)")
     ctx_parser.add_argument("--graph", default=None, help="Path to graph_state.json (default: arxiv_interp_graph/output/graph_state.json)")
@@ -2355,10 +2355,9 @@ def run_topic_mining_cmd(args: argparse.Namespace) -> None:
 
 
 def run_context_pack_cmd(args: argparse.Namespace) -> None:
-    """Build 3-paper context pack (seed + forward/backward), PDFs + manifest, optional LLM question (会后构想)."""
+    """Build 3-paper context pack (seed + forward/backward), PDFs + manifest, optional LLM question."""
     pkg_root = Path(__file__).resolve().parent
     arxiv_interp_root = pkg_root / "arxiv_interp_graph"
-    # arxiv_interp_graph 内部用 from config import，需将其目录放在 path 前才能从仓库根运行
     if str(arxiv_interp_root) not in sys.path:
         sys.path.insert(0, str(arxiv_interp_root))
     try:
@@ -2566,7 +2565,7 @@ async def async_main(args: argparse.Namespace) -> None:
         print("Welcome to the AutoInterp Agent Framework!")
         print("="*60 + f"{color_end}")
         user_input = input("\nEnter a topic you are interested in for LLM interpretability research (press Enter for suggestions from literature): ").strip()
-        
+
         if not user_input:
             # Pressed Enter: try topic mining suggestions first, then fall back to LLM-generated topic
             suggestions = get_topic_suggestions_from_mining(max_suggestions=5)
