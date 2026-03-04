@@ -180,3 +180,94 @@ notebook_chunk_descriptor:
     ```
 
     Provide: Explanation, Rationale, and Alternatives (when relevant).
+
+question_parser:
+  description: "Parse research question text into structured fields (question, rationale, procedure, title)"
+  system_prompt: |
+    You are a parser for research questions. Given raw text that may contain a research question with optional sections (RATIONALE, PROCEDURE, TITLE), extract the structured fields.
+
+    Output ONLY valid JSON with these keys (use empty string for missing):
+    - "question": The main research question text (required, never empty - use raw text if no structure)
+    - "rationale": Rationale section if present
+    - "procedure": Proposed procedure if present
+    - "title": Title if present
+
+    If the text does not follow QUESTION:/RATIONALE:/PROCEDURE:/TITLE: structure, infer the best split. The question key must always contain the core research question.
+  user_prompt: |
+    Parse this research question text into JSON:
+    ```
+    {raw_text}
+    ```
+
+    Output ONLY valid JSON, no other text.
+
+notebook_viz_adapter:
+  description: "Adapt standalone visualization script for Jupyter notebook - use analysis variables, display inline, no file saves"
+  system_prompt: |
+    You adapt a standalone Python visualization script for use inside a Jupyter notebook.
+
+    RULES:
+    1. The visualization runs AFTER the analysis code. All variables defined in the analysis (model, activations, tensors, DataFrames, etc.) are available in the notebook's global scope.
+    2. DO NOT save figures to disk. Remove all plt.savefig(), fig.write_image(), fig.write_html(), etc.
+    3. DO NOT re-run or re-import the analysis. Use the variables that already exist from running the analysis cells above.
+    4. Replace any file-loading (e.g., loading from analysis_output_dir) with using the in-memory variables from the analysis.
+    5. Use plt.show() or fig.show() to display the figure inline in the notebook.
+    6. Add brief inline comments explaining key visualization choices.
+    7. Output ONLY executable Python code. No markdown, no code fences.
+    8. Ensure the code is self-contained within the notebook context - it uses variables from prior cells and displays inline.
+  user_prompt: |
+    **Analysis code summary** (variables available in notebook scope after running analysis cells):
+    {analysis_code_summary}
+
+    **Key variables from analysis** (these exist - use them, don't recreate):
+    {available_variables}
+
+    **Original visualization script** (adapt for notebook - use variables above, display inline, no saves):
+    ```python
+    {original_viz_code}
+    ```
+
+    Produce the adapted notebook-ready visualization code. Output ONLY the Python code.
+
+notebook_viz_explanation:
+  description: "Generate what and why explanation for a visualization in the notebook"
+  system_prompt: |
+    You are an expert AI interpretability researcher. Given a visualization generated for an analysis, write a brief explanation in two sections.
+  user_prompt: |
+    **Context:** Step {step_index} of the analysis. Use the analysis output and visualization code below to understand what is being shown.
+
+    **Analysis output (excerpt):**
+    {result_excerpt}
+
+    **Visualization code (excerpt):**
+    {viz_code_excerpt}
+
+    Write exactly two sections:
+    **What:** 2-3 sentences describing what the figure displays—key quantities, dimensions, or patterns.
+    **Why:** 1-2 sentences on why this visualization was chosen for this analysis—what insight it helps answer.
+
+notebook_chunk_adapter:
+  description: "Rewrite analysis code chunk for notebook context with inline comments and proper paths"
+  system_prompt: |
+    You rewrite a code chunk from a standalone analysis script for use inside a Jupyter notebook.
+
+    RULES:
+    1. Add clear inline comments explaining key logic. Be concise but informative.
+    2. Use PROJECT_DIR (already defined earlier in the notebook) for any file paths. Paths must work when run from the notebook.
+    3. DO NOT save lists of prompts or intermediate data to disk. If the script saves prompts/data to a file:
+       - Replace with loading from PROJECT_DIR/data/ if the file exists. Add a print statement informing the user: "Loading prompts from [path] (saved by a previous run)."
+       - If the file does not exist, generate the prompts in-memory. Do not save them.
+    4. The chunk runs in a notebook where prior cells have already run—variables from earlier chunks in this step exist. Use them; do not redefine.
+    5. Keep the same logic and behavior. Only adapt paths, add comments, and remove unnecessary file saves.
+    6. Output ONLY executable Python code. No markdown, no code fences.
+  user_prompt: |
+    **Step {step_index}, chunk: {chunk_title}**
+
+    **Context:** This chunk is part of an analysis. PROJECT_DIR is the project root. Variables from previous chunks may exist: {previous_vars}.
+
+    **Original chunk** (rewrite for notebook—add inline comments, fix paths, handle data loading as described):
+    ```python
+    {chunk_content}
+    ```
+
+    Produce the adapted code. Output ONLY the Python code.

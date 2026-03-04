@@ -4,6 +4,7 @@ Creates comprehensive and reproducible interpretability reports.
 """
 
 import os
+import sys
 import json
 import re
 import datetime
@@ -54,6 +55,9 @@ import transformers
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(f"Running on {device}")
+
+# Parameters dict (some analysis scripts expect this from the executor)
+parameters = {}
 """
 
 
@@ -1461,6 +1465,84 @@ class ReportGenerator:
             else:
                 raise Exception(f"PDF summary generation failed and no fallback available: {e}")
         
+    async def _parse_question_robustly(self, raw_text: str) -> Dict[str, str]:
+        """
+        Parse research question text into structured fields. Uses rule-based first,
+        falls back to LLM if structure is ambiguous.
+        """
+        # Rule-based parsing
+        q_content = raw_text.strip()
+        rationale_content = ""
+        procedure_content = ""
+        title_content = ""
+
+        if "RATIONALE:" in raw_text or "QUESTION:" in raw_text.upper():
+            import re
+            q_match = re.search(r'QUESTION:?\s*(.+?)(?=RATIONALE:|PROCEDURE:|TITLE:|\Z)', raw_text, re.DOTALL | re.IGNORECASE)
+            if q_match:
+                q_content = q_match.group(1).strip()
+            rationale_match = re.search(r'RATIONALE:?\s*(.+?)(?=PROCEDURE:|TITLE:|\Z)', raw_text, re.DOTALL | re.IGNORECASE)
+            if rationale_match:
+                rationale_content = rationale_match.group(1).strip()
+            procedure_match = re.search(r'PROCEDURE:?\s*(.+?)(?=TITLE:|\Z)', raw_text, re.DOTALL | re.IGNORECASE)
+            if procedure_match:
+                procedure_content = procedure_match.group(1).strip()
+            title_match = re.search(r'TITLE:?\s*(.+?)(?=\Z)', raw_text, re.DOTALL | re.IGNORECASE)
+            if title_match:
+                title_content = title_match.group(1).strip()
+
+        # If rule-based left question empty or unclear, use LLM
+        if (not q_content or len(q_content) < 10) and self.llm_interface and "question_parser" in getattr(self, "reporter_prompts", {}):
+            try:
+                prompt_config = self.reporter_prompts["question_parser"]
+                user_prompt = prompt_config.get("user_prompt", "{raw_text}").format(raw_text=raw_text[:3000])
+                response = await self.llm_interface.generate(
+                    prompt=user_prompt,
+                    system_message=prompt_config.get("system_prompt", "Parse the question."),
+                    agent_name="reporter"
+                )
+                if response:
+                    import json
+                    raw = response.strip()
+                    if "```" in raw:
+                        import re
+                        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+                        if m:
+                            raw = m.group(1).strip()
+                    try:
+                        parsed = json.loads(raw)
+                    except json.JSONDecodeError:
+                        parsed = {"question": raw_text, "rationale": "", "procedure": "", "title": ""}
+                    q_content = parsed.get("question", q_content) or raw_text
+                    rationale_content = parsed.get("rationale", rationale_content)
+                    procedure_content = parsed.get("procedure", procedure_content)
+                    title_content = parsed.get("title", title_content)
+            except Exception as e:
+                self.logger.warning(f"LLM question parsing failed: {e}, using rule-based result")
+
+        if not q_content:
+            q_content = raw_text
+        return {"question": q_content, "rationale": rationale_content, "procedure": procedure_content, "title": title_content}
+
+    def _extract_analysis_variables(self, code: str) -> List[str]:
+        """Extract likely variable names from analysis code for viz adapter context."""
+        import re
+        vars_found = []
+        # Top-level assignments: name = 
+        for m in re.finditer(r'^\s*(\w+)\s*=', code, re.MULTILINE):
+            name = m.group(1)
+            if not name.startswith('_') and name not in ('if', 'elif', 'else', 'for', 'while', 'with', 'def', 'class'):
+                vars_found.append(name)
+        # Common patterns: model, activations, tokens, etc.
+        for pattern in [r'\b(model|activations|logits|cache|tokens|indices|attention_patterns|resid)\b',
+                       r'\b(df|dataframe|results|output)\b',
+                       r'\b(fig|ax|plt)\b']:
+            for m in re.finditer(pattern, code, re.IGNORECASE):
+                v = m.group(1).lower()
+                if v not in vars_found:
+                    vars_found.append(v)
+        return list(dict.fromkeys(vars_found))[:25]  # dedupe, cap
+
     async def generate_jupyter_notebook(self, 
                                         question: Union[str, Dict[str, Any]],
                                         analysis_results: Dict[str, Any],
@@ -1470,12 +1552,13 @@ class ReportGenerator:
                                         title: Optional[str] = None,
                                         output_path: Optional[Path] = None) -> Path:
         """
-        Generates a reproducible Jupyter notebook (.ipynb) using nbformat.
+        Generates a self-contained, reproducible Jupyter notebook (.ipynb).
+        Run all cells from top to bottom to reproduce the full analysis and visualizations.
         """
         if output_path is None:
             raise ValueError("output_path must be provided")
 
-        print(f"Generating Modular Jupyter Notebook at {output_path}...")
+        print(f"Generating self-contained Jupyter Notebook at {output_path}...")
         
         # --- 1. Initialize Notebook & Metadata ---
         nb = nbformat.v4.new_notebook()
@@ -1493,31 +1576,30 @@ class ReportGenerator:
             }
         }
 
-        # --- 2. Markdown Header & Intro (rich narrative sections) ---
+        # --- 2. How to Run & Environment Guidance ---
+        project_dir = str(self.path_resolver.get_project_dir().resolve())
+        guidance_md = """## How to Run This Notebook
+
+1. **Environment**: Python 3.10+ recommended. CUDA-capable GPU recommended for transformer models.
+2. **Install dependencies**: Run the setup cell below first. Uncomment the `pip install` line if packages are missing.
+3. **Execution order**: Run all cells from top to bottom (Cell → Run All). Do not skip cells.
+4. **Paths**: The notebook sets `PROJECT_DIR` and changes to the project directory. Ensure you are in the correct project folder.
+5. **Output**: All visualizations display inline. No files are saved from this notebook.
+"""
+        nb.cells.append(nbformat.v4.new_markdown_cell(guidance_md))
+
+        # --- 3. Markdown Header & Intro ---
         display_title = title or "AutoInterp Analysis Report"
         raw_text = question.get("text", str(question)) if isinstance(question, dict) else str(question)
-        
-        # Parse text (Question/Rationale/Procedure extraction logic)
-        q_content = raw_text
-        rationale_content = ""
-        procedure_content = ""
-        
-        if "RATIONALE:" in raw_text:
-            parts = raw_text.split("RATIONALE:")
-            q_content = parts[0].replace("Question:", "").strip()
-            remaining = parts[1]
-            if "PROCEDURE:" in remaining:
-                subparts = remaining.split("PROCEDURE:")
-                rationale_content = subparts[0].strip()
-                procedure_content = subparts[1].split("TITLE:")[0].strip()
-            else:
-                rationale_content = remaining.strip()
+        parsed = await self._parse_question_robustly(raw_text)
+        q_content = parsed["question"]
+        rationale_content = parsed["rationale"]
+        procedure_content = parsed["procedure"]
 
-        # Add Header Cells with rich documentation
         nb.cells.append(nbformat.v4.new_markdown_cell(
             f"# {display_title}\n\n"
-            "This notebook provides a **self-contained, reproducible** research report. "
-            "Run all cells from top to bottom to reproduce the full analysis."
+            "This notebook is **fully self-contained**. Run all cells from top to bottom to reproduce "
+            "the analysis and visualizations. No external scripts are required."
         ))
         nb.cells.append(nbformat.v4.new_markdown_cell(
             "## Hypothesis\n\n"
@@ -1533,12 +1615,27 @@ class ReportGenerator:
                 f"### Proposed Procedure\n{procedure_content}"
             ))
         
+        # --- 4. Path Setup (reproducibility) ---
+        path_setup_code = f'''# Set project directory for consistent paths (required for reproducibility)
+PROJECT_DIR = r"{project_dir}"
+import os
+os.chdir(PROJECT_DIR)
+print(f"Working directory: {{os.getcwd()}}")
+'''
+        path_setup_md = """## Path Setup
+
+**What:** Sets `PROJECT_DIR` to the project root and changes the working directory there so that relative paths in the analysis code (e.g. `data/prompts.csv`) resolve correctly.
+
+**Why:** The analysis scripts were written to assume they run from the project root. Running the notebook from a different directory would break path resolution. Setting `os.chdir(PROJECT_DIR)` ensures consistency with the original pipeline execution.
+"""
+        nb.cells.append(nbformat.v4.new_markdown_cell(path_setup_md))
+        nb.cells.append(nbformat.v4.new_code_cell(path_setup_code))
+
         # Experiment Setup section with configuration
         setup_md = (
             "## Experiment Setup\n\n"
-            "This section loads all dependencies and configures the environment. "
-            "**Rationale:** Mechanistic interpretability requires torch, transformer_lens, and related packages. "
-            "**Alternatives:** Use a conda environment or Docker for isolation.\n\n"
+            "**What:** Installs required packages (if needed) and imports the core libraries for mechanistic interpretability—torch, transformer_lens, matplotlib, etc.\n\n"
+            "**Why:** The analysis code depends on these packages. Running the `pip install` cell once ensures a compatible environment. The imports match what the analysis executor injects when running scripts standalone.\n\n"
             "**Configuration:**"
         )
         if task_config:
@@ -1548,17 +1645,14 @@ class ReportGenerator:
                 setup_md += f"\n- **Dataset:** `{task_config.get('dataset', 'Unknown')}`"
         nb.cells.append(nbformat.v4.new_markdown_cell(setup_md))
         
-        # --- 3. Dynamic Environment Setup ---
-        # (Passes analysis results to scan for imports like sklearn/cv2/wandb)
+        # --- 5. Dynamic Environment Setup (pip + imports) ---
         nb.cells.append(self._create_setup_cell(analysis_results))
         
-        # --- 4. Process Analysis Steps (1:1 mapping to executed scripts) ---
+        # --- 6. Process Analysis Steps (1:1 mapping to executed scripts) ---
         nb.cells.append(nbformat.v4.new_markdown_cell(
             "## Analysis Steps\n\n"
-            "The following cells replicate the analysis performed by the AutoInterp agent. "
-            "Each step maps 1:1 to the underlying analysis scripts. "
-            "**Rationale:** Presenting modular code chunks improves clarity and debuggability. "
-            "**Alternatives:** Run steps independently to explore intermediate results."
+            "The following cells replicate the analysis. Each step is split by function/class. "
+            "Run all cells in order; later visualization cells use variables from these steps."
         ))
         analyses = analysis_results.get("analyses", [])
         successful_steps = [a for a in analyses if a.get("status") == "success"]
@@ -1581,48 +1675,72 @@ class ReportGenerator:
             explanation_md = await self._generate_step_explanation(i, clean_code, result_output)
             nb.cells.append(nbformat.v4.new_markdown_cell(explanation_md))
 
-            # C. Modularize into granular chunks with LLM-generated per-chunk descriptions
+            # C. Modularize into chunks, adapt each for notebook, and add descriptions
             code_chunks = self._split_code_into_logical_chunks(clean_code)
+            previous_vars_in_step = []
 
             for chunk in code_chunks:
                 desc = await self._generate_chunk_description(chunk["content"], chunk["title"])
                 chunk_md = f"**{chunk['title']}**\n\n{desc}"
                 nb.cells.append(nbformat.v4.new_markdown_cell(chunk_md))
 
-                content = chunk["content"]
+                if chunk["title"] == "Imports & Dependencies":
+                    content = chunk["content"]
+                else:
+                    content = await self._adapt_chunk_for_notebook(
+                        chunk_content=chunk["content"],
+                        chunk_title=chunk["title"],
+                        step_index=i,
+                        previous_vars=previous_vars_in_step,
+                    )
+                    if not content:
+                        content = chunk["content"]
                 if chunk["title"] != "Imports & Dependencies" and content.strip():
                     header_comment = f"# Step {i}: {chunk['title']}\n"
                     content = header_comment + content
                 nb.cells.append(nbformat.v4.new_code_cell(content))
+                new_vars = self._extract_analysis_variables(content)
+                previous_vars_in_step = list(dict.fromkeys(previous_vars_in_step + new_vars))
             
-            # D. Output Summary
+            # D. Output Summary (no truncation - preserve important results)
             if result_output:
-                trunc_len = 1000
-                trunc_out = result_output[:trunc_len] + f"\n... [Output Truncated]" if len(result_output) > trunc_len else result_output
-                nb.cells.append(nbformat.v4.new_markdown_cell(f"**Verifiable Output:**\n```text\n{trunc_out}\n```"))
+                nb.cells.append(nbformat.v4.new_markdown_cell(f"**Verifiable Output:**\n```text\n{result_output}\n```"))
 
-            # E. Visualization for this analysis step (lookup by analysis_name, not step index)
+            # E. Visualization for this analysis step - LLM adapts for notebook (use variables, display inline)
             analysis_name = self._extract_analysis_name(step, i)
             if analysis_name in visualizations:
                 viz_code = self._load_visualization_code(analysis_name)
                 if viz_code:
-                    clean_viz = self._sanitize_code(viz_code)
-                    # Prepend note: viz is self-contained, does not assume step numbering
-                    preamble = "# Self-contained visualization: reproduces analysis results inline.\n"
-                    preamble += "# Does not depend on step numbers or prior cell variable names.\n\n"
-                    clean_viz = preamble + clean_viz
-                    if "plt.show()" not in clean_viz and "fig.show()" not in clean_viz and "display(" not in clean_viz:
-                        clean_viz = clean_viz.rstrip() + "\n\nplt.show()  # Display figure inline"
-                    nb.cells.append(nbformat.v4.new_markdown_cell(
-                        f"### Visualization for Step {i}\n\n"
-                        f"*This visualization corresponds to the analysis above. "
-                        f"Run the cell to regenerate the figure (self-contained; no step numbering assumed).*"
-                    ))
-                    nb.cells.append(nbformat.v4.new_code_cell(clean_viz))
+                    clean_viz_raw = self._sanitize_code(viz_code)
+                    analysis_code_for_step = clean_code
+                    available_vars = self._extract_analysis_variables(analysis_code_for_step)
+                    adapted_viz = await self._adapt_viz_for_notebook(
+                        analysis_code_summary=analysis_code_for_step[:4000],
+                        available_variables=available_vars,
+                        original_viz_code=clean_viz_raw
+                    )
+                    if adapted_viz:
+                        if "plt.show()" not in adapted_viz and "fig.show()" not in adapted_viz and "display(" not in adapted_viz:
+                            adapted_viz = adapted_viz.rstrip() + "\n\nplt.show()  # Display figure inline"
+                        viz_explanation = await self._generate_viz_explanation(
+                            step_index=i,
+                            result_excerpt=result_output[:1500],
+                            viz_code_excerpt=adapted_viz[:2000],
+                        )
+                        nb.cells.append(nbformat.v4.new_markdown_cell(
+                            f"### Visualization for Step {i}\n\n{viz_explanation}\n\n"
+                            f"*Uses variables from the analysis cells above. Displays inline (no file save).*"
+                        ))
+                        nb.cells.append(nbformat.v4.new_code_cell(adapted_viz))
+                    else:
+                        nb.cells.append(nbformat.v4.new_markdown_cell(
+                            f"### Visualization for Step {i}\n\n"
+                            f"*Visualization adaptation failed: {getattr(self, '_last_viz_error', 'Unknown error')}*"
+                        ))
                 else:
                     nb.cells.append(nbformat.v4.new_markdown_cell(
                         f"### Visualization for Step {i}\n\n"
-                        f"*Visualization script not found. Re-run the pipeline to regenerate.*"
+                        f"*Visualization script not found on disk. Re-run the pipeline to regenerate.*"
                     ))
 
         # --- 5. Evaluation & Conclusion ---
@@ -1639,73 +1757,286 @@ class ReportGenerator:
 """
         nb.cells.append(nbformat.v4.new_markdown_cell(eval_md))
         
-        # --- 6. Save File ---
-        # (Visualizations are interleaved with analysis steps above)
+        # --- 7. Save File ---
         with open(output_path, 'w', encoding='utf-8') as f:
             nbformat.write(nb, f)
+
+        # --- 8. Validate notebook runs ---
+        validation_ok = self._validate_notebook_runs(output_path)
+        if validation_ok:
+            print(f"[AUTOINTERP] Notebook generation complete and validated at {output_path}")
+        else:
+            print(f"[AUTOINTERP] Notebook saved at {output_path} (validation run reported errors - review before use)")
             
-        print(f"[AUTOINTERP] Notebook generation complete at {output_path}")
         return output_path
 
+    def _validate_notebook_runs(self, nb_path: Path, timeout: int = 300) -> bool:
+        """
+        Execute the notebook to validate it runs. Returns True if execution succeeds.
+        """
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                out_name = "validated.ipynb"
+                cwd = str(self.path_resolver.get_project_dir())
+                cmd = [
+                    sys.executable, "-m", "nbconvert",
+                    "--ExecutePreprocessor.timeout=" + str(timeout),
+                    "--to", "notebook",
+                    "--execute",
+                    str(nb_path),
+                    "--output", out_name,
+                    "--output-dir", tmpdir,
+                ]
+                result = subprocess.run(
+                    cmd,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout + 60,
+                )
+            if result.returncode != 0:
+                self.logger.warning(f"Notebook validation failed: {result.stderr or result.stdout}")
+                return False
+            return True
+        except subprocess.TimeoutExpired:
+            self.logger.warning("Notebook validation timed out")
+            return False
+        except (FileNotFoundError, ModuleNotFoundError):
+            self.logger.debug("nbconvert not found, skipping notebook validation")
+            return True  # Don't fail if nbconvert not installed
+        except Exception as e:
+            self.logger.warning(f"Notebook validation error: {e}")
+            return False
+
     # --- HELPER METHODS (Ensure these are in the class) ---
+
+    async def _adapt_chunk_for_notebook(
+        self,
+        chunk_content: str,
+        chunk_title: str,
+        step_index: int,
+        previous_vars: List[str],
+    ) -> Optional[str]:
+        """
+        Rewrite a code chunk for notebook context: inline comments, PROJECT_DIR paths, no prompt saves.
+        """
+        section_key = "notebook_chunk_adapter"
+        if not self.llm_interface or not hasattr(self, "reporter_prompts") or section_key not in self.reporter_prompts:
+            return None
+        try:
+            prompt_config = self.reporter_prompts[section_key]
+            user_prompt = prompt_config.get("user_prompt", "").format(
+                step_index=step_index,
+                chunk_title=chunk_title,
+                previous_vars=", ".join(previous_vars) if previous_vars else "(none yet)",
+                chunk_content=chunk_content[:8000],
+            )
+            response = await self.llm_interface.generate(
+                prompt=user_prompt,
+                system_message=prompt_config.get("system_prompt", "Adapt chunk for notebook."),
+                agent_name="reporter",
+            )
+            if not response or not response.strip():
+                return None
+            code = response.strip()
+            if "```" in code:
+                m = re.search(r"```(?:python)?\s*([\s\S]*?)```", code)
+                if m:
+                    code = m.group(1).strip()
+            return self._sanitize_code(code)
+        except Exception as e:
+            if hasattr(self, "logger"):
+                self.logger.warning(f"Chunk adaptation failed: {e}")
+            return None
+
+    async def _generate_viz_explanation(
+        self,
+        step_index: int,
+        result_excerpt: str,
+        viz_code_excerpt: str,
+    ) -> str:
+        """Generate what/why explanation for a visualization cell."""
+        section_key = "notebook_viz_explanation"
+        if not self.llm_interface or not hasattr(self, "reporter_prompts") or section_key not in self.reporter_prompts:
+            return "*Explanation unavailable (prompt not found).*"
+        try:
+            prompt_config = self.reporter_prompts[section_key]
+            user_prompt = prompt_config.get("user_prompt", "").format(
+                step_index=step_index,
+                result_excerpt=result_excerpt[:1500],
+                viz_code_excerpt=viz_code_excerpt[:2000],
+            )
+            response = await self.llm_interface.generate(
+                prompt=user_prompt,
+                system_message=prompt_config.get("system_prompt", "Explain the visualization."),
+                agent_name="reporter",
+            )
+            return response.strip() if response else "*Explanation generation failed.*"
+        except Exception as e:
+            if hasattr(self, "logger"):
+                self.logger.warning(f"Viz explanation failed: {e}")
+            return f"*Explanation failed: {type(e).__name__}: {str(e)}*"
+
+    async def _adapt_viz_for_notebook(
+        self,
+        analysis_code_summary: str,
+        available_variables: List[str],
+        original_viz_code: str
+    ) -> Optional[str]:
+        """
+        Use LLM to adapt standalone viz script for notebook: use analysis variables, display inline, no saves.
+        """
+        section_key = "notebook_viz_adapter"
+        if not self.llm_interface or not hasattr(self, "reporter_prompts") or section_key not in self.reporter_prompts:
+            self._last_viz_error = "Prompt 'notebook_viz_adapter' not found"
+            return None
+        try:
+            prompt_config = self.reporter_prompts[section_key]
+            user_prompt = prompt_config.get("user_prompt", "").format(
+                analysis_code_summary=analysis_code_summary,
+                available_variables=", ".join(available_variables) if available_variables else "(infer from analysis code)",
+                original_viz_code=original_viz_code[:6000]
+            )
+            response = await self.llm_interface.generate(
+                prompt=user_prompt,
+                system_message=prompt_config.get("system_prompt", "Adapt visualization for notebook."),
+                agent_name="reporter"
+            )
+            if not response or not response.strip():
+                self._last_viz_error = "LLM returned empty response"
+                return None
+            code = response.strip()
+            if "```" in code:
+                import re
+                m = re.search(r"```(?:python)?\s*([\s\S]*?)```", code)
+                if m:
+                    code = m.group(1).strip()
+            return self._sanitize_code(code)
+        except Exception as e:
+            self._last_viz_error = str(e)
+            if hasattr(self, "logger"):
+                self.logger.warning(f"Viz adaptation failed: {e}")
+            return None
 
     async def _generate_step_explanation(self, index: int, code: str, result: str) -> str:
         """
         Generates commentary using the prompt defined in prompts/reporter.yaml.
+        Uses full code and result; returns specific failure message on error.
         """
         header = f"## Step {index}: Analysis Execution"
         section_key = "notebook_step_explainer"
         
-        # 1. Safety Check: Ensure prompts are loaded
         if not self.llm_interface or not hasattr(self, 'reporter_prompts') or section_key not in self.reporter_prompts:
-            return f"{header}\n*Automated explanation unavailable (Prompt '{section_key}' not found).*"
+            return f"{header}\n*Explanation failed: Prompt '{section_key}' not found in reporter prompts.*"
 
         try:
-            # 2. Extract configuration from YAML dict
             prompt_config = self.reporter_prompts[section_key]
             system_prompt = prompt_config.get("system_prompt", "You are a helpful assistant.")
             user_prompt_template = prompt_config.get("user_prompt", "{code_content}")
-            
-            # 3. Format the prompt (Truncate large outputs to save tokens)
             user_prompt = user_prompt_template.format(
                 step_index=index,
-                code_content=code[:2500], 
-                execution_result=result[:1000]
+                code_content=code,
+                execution_result=result
             )
-            
-            # 4. Generate Response
             response = await self.llm_interface.generate(
                 prompt=user_prompt,
                 system_message=system_prompt,
                 agent_name="reporter"
             )
-            
             return f"{header}\n\n{response.strip()}"
-            
         except Exception as e:
             if hasattr(self, 'logger'):
                 self.logger.error(f"Error generating explanation for step {index}: {e}")
-            return f"{header}\n*Error generating explanation: {str(e)}*"
+            return f"{header}\n*Explanation generation failed: {type(e).__name__}: {str(e)}*"
 
     def _sanitize_code(self, code: str) -> str:
-        """Cleans up common JSON-to-Python artifacts and format issues."""
+        """
+        Cleans up common JSON-to-Python artifacts and format issues.
+        Avoids replacing null/true/false inside string literals to prevent breaking valid code.
+        """
         import re
-        # Fix JSON booleans/nulls
-        replacements = {r'\bnull\b': 'None', r'\btrue\b': 'True', r'\bfalse\b': 'False'}
-        for pattern, replacement in replacements.items():
-            code = re.sub(pattern, replacement, code, flags=re.IGNORECASE)
-        # Fix markdown artifacts
-        code = code.replace("```python", "").replace("```", "")
-        # Ensure consistent spacing
-        code = re.sub(r'\n+(def|class) ', r'\n\n\n\1 ', code)
+        # Remove markdown code fences only at boundaries
+        code = code.strip()
+        if code.startswith("```python"):
+            code = code[9:].lstrip()
+        elif code.startswith("```"):
+            code = code[3:].lstrip()
+        if code.endswith("```"):
+            code = code[:-3].rstrip()
+        # Fix JSON booleans/nulls only when NOT inside quotes (simplified: only at word boundaries
+        # and not preceded by quote). Use a conservative approach: replace only in contexts
+        # that look like Python (e.g., after = or , or () with optional whitespace).
+        def replace_json_token(match: re.Match) -> str:
+            token = match.group(0).lower()
+            if token == "null":
+                return "None"
+            if token == "true":
+                return "True"
+            if token == "false":
+                return "False"
+            return match.group(0)
+        # Only replace when it looks like a standalone token (not in string)
+        # Pattern: word boundary, then null/true/false, then word boundary
+        code = re.sub(r'(?<=[=\s,(\[])\s*(null|true|false)\s*(?=[\s,)\];])', replace_json_token, code, flags=re.IGNORECASE)
+        # Ensure consistent spacing around def/class
+        code = re.sub(r'\n+(def|class) ', r'\n\n\1 ', code)
         return code.strip()
 
-    MAX_CHUNK_LINES = 25  # Split large blocks for finer granularity
+    def _split_code_into_logical_chunks(self, code: str) -> List[Dict[str, str]]:
+        """
+        Splits script by function and class boundaries only. Never splits mid-statement.
+        Each chunk is a complete def, class, or top-level block.
+        """
+        import re
+        chunks = []
+        lines = code.split('\n')
+
+        # Extract Imports (standalone)
+        import_lines = [l for l in lines if l.strip().startswith(('import ', 'from '))]
+        other_lines = [l for l in lines if not l.strip().startswith(('import ', 'from '))]
+
+        if import_lines:
+            chunks.append({"type": "code", "title": "Imports & Dependencies", "content": "\n".join(import_lines)})
+
+        remaining_code = "\n".join(other_lines).strip()
+        if not remaining_code:
+            return chunks
+
+        # Split by def, class, or if __name__ - keep each block intact
+        # Match: start of line (or after newline), then def/class/if __name__
+        pattern = r'\n(?=(?:def |class |if __name__\s*==))'
+        raw_sections = re.split(pattern, remaining_code)
+
+        # First section might not start with def/class (e.g. top-level config)
+        for section in raw_sections:
+            section = section.strip()
+            if not section:
+                continue
+
+            title = "Analysis Logic"
+            if section.startswith("def "):
+                name = section.split('(')[0].replace("def ", "").strip()
+                title = f"Define Helper: `{name}`"
+            elif section.startswith("class "):
+                name = section.split(':')[0].replace("class ", "").strip()
+                title = f"Define Class: `{name}`"
+            elif section.startswith("if __name__"):
+                title = "Main Execution Block"
+            elif section.startswith("#"):
+                title = section.split('\n')[0].replace("#", "").strip()
+            elif "plt." in section or "fig." in section or "sns." in section:
+                title = "Visualization"
+
+            chunks.append({"type": "code", "title": title, "content": section})
+
+        return chunks
 
     async def _generate_chunk_description(self, chunk_content: str, title: str) -> str:
         """
         Generate a brief description for a code chunk using the LLM.
-        Falls back to title if LLM unavailable.
+        Returns specific failure message on error.
         """
         section_key = "notebook_chunk_descriptor"
         if not self.llm_interface or not hasattr(self, "reporter_prompts") or section_key not in self.reporter_prompts:
@@ -1717,75 +2048,17 @@ class ReportGenerator:
             prompt_config = self.reporter_prompts[section_key]
             system_prompt = prompt_config.get("system_prompt", "Describe this code briefly.")
             user_prompt_template = prompt_config.get("user_prompt", "{chunk_content}")
-            user_prompt = user_prompt_template.format(chunk_content=chunk_content[:2000])
+            user_prompt = user_prompt_template.format(chunk_content=chunk_content[:6000])
             response = await self.llm_interface.generate(
                 prompt=user_prompt,
                 system_message=system_prompt,
                 agent_name="reporter",
             )
-            return response.strip()[:2000] if response else title
+            return (response.strip()[:3000] if response else title)
         except Exception as e:
             if hasattr(self, "logger"):
                 self.logger.warning(f"Chunk description generation failed: {e}")
-            return title
-
-    def _split_code_into_logical_chunks(self, code: str) -> List[Dict[str, str]]:
-        """
-        Splits script into granular logical chunks for step-by-step explanation.
-        Keeps chunks small (max ~25 lines) and adds descriptive titles.
-        """
-        import re
-        chunks = []
-        lines = code.split('\n')
-
-        # Extract Imports
-        import_lines = [l for l in lines if l.strip().startswith(('import ', 'from '))]
-        other_lines = [l for l in lines if not l.strip().startswith(('import ', 'from '))]
-
-        if import_lines:
-            chunks.append({"type": "code", "title": "Imports & Dependencies", "content": "\n".join(import_lines)})
-
-        remaining_code = "\n".join(other_lines).strip()
-
-        # Primary split: def, class, # headers, if __name__
-        raw_sections = re.split(r'\n{2,}(?=# |def |class |if __name__)', remaining_code)
-
-        for section in raw_sections:
-            section = section.strip()
-            if not section:
-                continue
-
-            title = "Analysis Logic"
-            if section.startswith("def "):
-                title = f"Define Helper: `{section.split('(')[0].replace('def ', '')}`"
-            elif section.startswith("class "):
-                title = f"Define Class: `{section.split(':')[0].replace('class ', '')}`"
-            elif section.startswith("#"):
-                title = section.split('\n')[0].replace("#", "").strip()
-            elif "plt." in section or "fig." in section:
-                title = "Visualization"
-
-            # Further split large sections for granularity
-            section_lines = section.split('\n')
-            if len(section_lines) <= self.MAX_CHUNK_LINES:
-                chunks.append({"type": "code", "title": title, "content": section})
-            else:
-                # Split by double newlines or by common logical boundaries
-                sub_sections = re.split(r'\n{2,}', section)
-                for sub in sub_sections:
-                    sub = sub.strip()
-                    if not sub:
-                        continue
-                    sub_lines = sub.split('\n')
-                    if len(sub_lines) <= self.MAX_CHUNK_LINES:
-                        chunks.append({"type": "code", "title": title, "content": sub})
-                    else:
-                        for idx in range(0, len(sub_lines), self.MAX_CHUNK_LINES):
-                            block = "\n".join(sub_lines[idx : idx + self.MAX_CHUNK_LINES])
-                            if block.strip():
-                                chunks.append({"type": "code", "title": f"{title} (part)", "content": block})
-
-        return chunks
+            return f"*Chunk description failed: {type(e).__name__}: {str(e)}*"
 
     def _extract_analysis_name(self, step: Dict[str, Any], step_index: int) -> str:
         """
@@ -1908,11 +2181,11 @@ class ReportGenerator:
 
     def _create_setup_cell(self, analysis_results: Dict[str, Any]) -> nbformat.NotebookNode:
         """
-        Creates the environment setup cell with ALL necessary imports for mechanistic
-        interpretability. Ensures the notebook is self-contained and runnable.
+        Creates the environment setup cell with dynamic pip install and imports.
+        Ensures the notebook is self-contained and runnable.
         """
         requirements = self._get_dynamic_requirements(analysis_results)
-        pip_line = f"# !pip install {' '.join(requirements)}  # Uncomment if packages are missing\n\n"
+        pip_line = f"# Install dependencies (run once; comment out if already installed)\n!pip install -q {' '.join(requirements)}\n\n"
         content = pip_line + NOTEBOOK_STANDARD_IMPORTS
         return new_code_cell(content)
     

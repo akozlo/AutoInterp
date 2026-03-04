@@ -23,6 +23,7 @@ networkx>=2.6.0  # For attention flow visualizations
 # Jupyter and reporting
 jupyter>=1.0.0
 nbformat>=5.1.0
+nbconvert>=7.0.0
 markdown>=3.3.0
 ipython>=7.31.0
 weasyprint>=56.0

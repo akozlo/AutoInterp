@@ -1968,12 +1968,13 @@ async def generate_report(
         logger.info(f"Generated report at {report_path}")
         print(f"[AUTOINTERP] Generated comprehensive report at {report_path}")
         
+        notebook_path = None
         try:
             report_path_obj = Path(report_path)
             notebook_filename = report_path_obj.stem + "_notebook.ipynb"
             notebook_path = report_path_obj.parent / notebook_filename
             
-            print(f"[AUTOINTERP] Generating transparent Jupyter Notebook at {notebook_path}...")
+            print(f"[AUTOINTERP] Generating self-contained Jupyter Notebook at {notebook_path}...")
             
             await report_generator.generate_jupyter_notebook(
                 question=active_question,
@@ -1988,10 +1989,11 @@ async def generate_report(
         except Exception as nb_e:
             logger.error(f"Failed to generate Jupyter notebook: {nb_e}")
             print(f"[AUTOINTERP] Warning: Failed to generate Jupyter notebook: {nb_e}")
+            notebook_path = None  # Ensure we don't return path to non-existent file
 
         return {
             "report_path": report_path,
-            "notebook_path": notebook_path,
+            "notebook_path": str(notebook_path) if notebook_path else None,
             "conclusion": conclusion_type,
             "final_confidence": final_confidence
         }
@@ -2128,6 +2130,9 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[AUTOINTERP] Task execution completed - {get_timestamp()}")
         if "report_path" in report_result and report_result["report_path"]:
             print(f"[AUTOINTERP] Report generated: {report_result['report_path']}")
+        if "notebook_path" in report_result and report_result["notebook_path"]:
+            print(f"[AUTOINTERP] Self-contained notebook: {report_result['notebook_path']}")
+            print(f"[AUTOINTERP] Run the notebook to reproduce the full analysis and visualizations.")
         print("="*80 + "\n")
         
         # Final logging
@@ -2137,6 +2142,7 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
             "status": "completed",
             "task_name": task_name,
             "report_path": report_result.get("report_path"),
+            "notebook_path": report_result.get("notebook_path"),
             "conclusion": report_result.get("conclusion"),
             "final_confidence": report_result.get("final_confidence")
         }
