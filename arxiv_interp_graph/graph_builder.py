@@ -28,6 +28,14 @@ def _paper_to_node_attrs(paper: dict, wave: int, group: str = "") -> dict:
         abstract = abstract.strip()
     else:
         abstract = ""
+    external_ids = paper.get("externalIds") or {}
+    arxiv_id = external_ids.get("ArXiv") or external_ids.get("arXiv")
+    # For non-arxiv papers, store openAccessPdf URL (Distill, Transformer Circuits, etc.)
+    open_access_url = None
+    if not arxiv_id:
+        oa = paper.get("openAccessPdf")
+        if isinstance(oa, dict) and oa.get("url"):
+            open_access_url = oa["url"]
     return {
         "title": paper.get("title", ""),
         "year": paper.get("year"),
@@ -36,6 +44,8 @@ def _paper_to_node_attrs(paper: dict, wave: int, group: str = "") -> dict:
         "authors": "; ".join(author_names),
         "url": paper.get("url", ""),
         "abstract": abstract,
+        "arxiv_id": arxiv_id,
+        "open_access_url": open_access_url,
         "wave": wave,
         "group": group,
     }

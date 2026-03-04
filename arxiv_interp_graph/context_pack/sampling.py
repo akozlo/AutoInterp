@@ -16,6 +16,8 @@ def _node_to_paper(G: nx.DiGraph, nid: str, relation: str, source: str = "graph"
         "title": (attrs.get("title") or "").strip(),
         "year": attrs.get("year"),
         "abstract": (attrs.get("abstract") or "").strip(),
+        "arxiv_id": attrs.get("arxiv_id"),
+        "open_access_url": attrs.get("open_access_url"),
         "relation": relation,
         "source": source,
     }

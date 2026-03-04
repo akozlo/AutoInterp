@@ -45,7 +45,7 @@ DEFAULT_YEAR_MAX = 2026
 DEFAULT_MIN_CITATIONS = 10
 
 # Paper fields to fetch (abstract for topic package / LLM summarization)
-PAPER_FIELDS = "paperId,externalIds,title,year,citationCount,authors,venue,url,abstract"
+PAPER_FIELDS = "paperId,externalIds,openAccessPdf,title,year,citationCount,authors,venue,url,abstract"
 CITATION_FIELDS = "paperId,externalIds,title,year,citationCount"
 REFERENCE_FIELDS = "paperId"
 

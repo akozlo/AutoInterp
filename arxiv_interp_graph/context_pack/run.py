@@ -64,20 +64,44 @@ def _extract_pdf_text(path: Path, max_pages: int = 6, max_chars: int = 6000) -> 
         return ""
 
 
+def _extract_html_text(path: Path, max_chars: int = 6000) -> str:
+    """Extract readable text from an HTML article (Distill, Transformer Circuits, etc.)."""
+    import re as _re
+    try:
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+        # Remove script and style blocks
+        raw = _re.sub(r"<(script|style)[^>]*>.*?</\1>", "", raw, flags=_re.DOTALL | _re.IGNORECASE)
+        # Strip HTML tags
+        text = _re.sub(r"<[^>]+>", " ", raw)
+        # Collapse whitespace
+        text = _re.sub(r"\s+", " ", text).strip()
+        return text[:max_chars] if max_chars and len(text) > max_chars else text
+    except Exception:
+        return ""
+
+
+def _extract_article_text(path: Path, max_chars: int = 6000, max_pdf_pages: int = 6) -> str:
+    """Extract text from a downloaded article (PDF or HTML) based on file extension."""
+    suffix = path.suffix.lower()
+    if suffix == ".html" or suffix == ".htm":
+        return _extract_html_text(path, max_chars=max_chars)
+    return _extract_pdf_text(path, max_pages=max_pdf_pages, max_chars=max_chars)
+
+
 def _paper_content_for_llm(
     p: Dict[str, Any],
-    max_pdf_chars: int = 6000,
+    max_chars: int = 6000,
     max_pdf_pages: int = 6,
     max_abstract: int = 600,
 ) -> str:
-    """Build content for LLM: prefer PDF excerpt when available, else abstract."""
+    """Build content for LLM: prefer article excerpt (PDF or HTML) when available, else abstract."""
     title = (p.get("title") or "").strip()
     year = p.get("year") or "n.d."
     rel = p.get("relation", "")
     header = f"[{rel.upper()}] {title} ({year})\n\n"
-    pdf_path = p.get("pdf_path") or p.get("download_path")
-    if pdf_path and Path(pdf_path).exists():
-        text = _extract_pdf_text(Path(pdf_path), max_pages=max_pdf_pages, max_chars=max_pdf_chars)
+    dl_path = p.get("download_path") or p.get("pdf_path")
+    if dl_path and Path(dl_path).exists():
+        text = _extract_article_text(Path(dl_path), max_chars=max_chars, max_pdf_pages=max_pdf_pages)
         if text:
             return header + text + "\n\n"
     abstract = (p.get("abstract") or "").strip()
@@ -93,8 +117,8 @@ def _generate_question_llm(
     system = "You output only the requested format. No markdown, no extra text."
     pdf_paths = []
     for p in papers:
-        path = p.get("pdf_path") or p.get("download_path")
-        if path and Path(path).exists():
+        path = p.get("download_path") or p.get("pdf_path")
+        if path and Path(path).exists() and Path(path).suffix.lower() == ".pdf":
             pdf_paths.append(path)
     # Prefer sending whole PDFs to OpenRouter (Sonnet 4.6) when we have all 3
     if len(pdf_paths) == 3:
