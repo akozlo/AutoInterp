@@ -201,33 +201,56 @@ question_parser:
 
     Output ONLY valid JSON, no other text.
 
+notebook_variable_extractor:
+  description: "Extract variable names from analysis code that a visualization would need (generalizable to any interpretability analysis)"
+  system_prompt: |
+    You identify variable names from mechanistic interpretability analysis code that hold key results or intermediate data a visualization would need.
+
+    The analysis could be: causal tracing, attention pattern analysis, logit lens, activation patching, sparse autoencoders, probe training, steering vectors, or any other interpretability technique. Variable names vary by analysis type.
+
+    Output ONLY a comma-separated list of variable names (e.g. model, cache, restoration_matrix, layer_indices, avg_en_profile). No explanations, no markdown, no code fences. Use lowercase. Include variables that hold:
+    - Model/cache/activations
+    - Results (matrices, profiles, correlations, DataFrames)
+    - Data used for plotting (x/y values, layer indices, token positions)
+    - Configuration used in viz (e.g. sample_layers, n_tokens)
+
+    Exclude: loop indices (i, j, k), temporary variables (tmp, _, x), Python built-ins. Include substantive output variables even if their names are analysis-specific.
+  user_prompt: |
+    **Analysis code** (mechanistic interpretability - causal tracing, attention, probes, SAEs, etc.):
+    ```python
+    {analysis_code}
+    ```
+
+    List the variable names that a visualization of this analysis would need. Output ONLY a comma-separated list, e.g.: model, cache, results_df, layer_profiles, attention_weights
+
 notebook_viz_adapter:
-  description: "Adapt standalone visualization script for Jupyter notebook - use analysis variables, display inline, no file saves"
+  description: "Adapt visualization for notebook - use ONLY in-notebook variables, no file loads, no hardcoded data"
   system_prompt: |
     You adapt a standalone Python visualization script for use inside a Jupyter notebook.
+    The visualization must use ONLY data generated in the notebook. No hardcoded values, no loading from disk.
 
     RULES:
-    1. The visualization runs AFTER the analysis code. All variables defined in the analysis (model, activations, tensors, DataFrames, etc.) are available in the notebook's global scope.
-    2. DO NOT save figures to disk. Remove all plt.savefig(), fig.write_image(), fig.write_html(), etc.
-    3. DO NOT re-run or re-import the analysis. Use the variables that already exist from running the analysis cells above.
-    4. Replace any file-loading (e.g., loading from analysis_output_dir) with using the in-memory variables from the analysis.
-    5. Use plt.show() or fig.show() to display the figure inline in the notebook.
+    1. The visualization runs AFTER the analysis code. All variables from the analysis cells exist in scope. USE THEM. Variable names depend on the analysis type (causal tracing, attention, probes, SAEs, etc.).
+    2. DO NOT save figures to disk. Remove all plt.savefig(), fig.write_image(), fig.write_html(). Use plt.show() or fig.show() to display inline.
+    3. DO NOT load data from files. Replace any json.load(), pd.read_csv(), or file-reading with the in-memory variables from the analysis.
+    4. DO NOT use hardcoded numbers, lists, or arrays. Use the variables produced by the analysis (e.g. layer_indices, profiles, results dicts, DataFrames).
+    5. DO NOT re-run the analysis. Use the variables that already exist from the cells above.
     6. Add brief inline comments explaining key visualization choices.
     7. Output ONLY executable Python code. No markdown, no code fences.
-    8. Ensure the code is self-contained within the notebook context - it uses variables from prior cells and displays inline.
+    8. If the original script expects data not in the listed variables, infer correct names from the analysis code summary. The analysis type determines variable names—use the provided list as the source of truth.
   user_prompt: |
     **Analysis code summary** (variables available in notebook scope after running analysis cells):
     {analysis_code_summary}
 
-    **Key variables from analysis** (these exist - use them, don't recreate):
+    **Key variables from analysis** (use these—do NOT load from disk or hardcode):
     {available_variables}
 
-    **Original visualization script** (adapt for notebook - use variables above, display inline, no saves):
+    **Original visualization script** (adapt: use variables above for ALL data, display inline, no file saves or loads):
     ```python
     {original_viz_code}
     ```
 
-    Produce the adapted notebook-ready visualization code. Output ONLY the Python code.
+    Produce the adapted notebook-ready visualization code. Output ONLY the Python code. Every data value must come from a variable defined in the analysis cells above.
 
 notebook_viz_explanation:
   description: "Generate what and why explanation for a visualization in the notebook"
@@ -247,25 +270,29 @@ notebook_viz_explanation:
     **Why:** 1-2 sentences on why this visualization was chosen for this analysis—what insight it helps answer.
 
 notebook_chunk_adapter:
-  description: "Rewrite analysis code chunk for notebook context with inline comments and proper paths"
+  description: "Rewrite analysis code chunk for notebook context - self-contained, variables for downstream cells"
   system_prompt: |
     You rewrite a code chunk from a standalone analysis script for use inside a Jupyter notebook.
+    The notebook must be SELF-CONTAINED: all results stored in variables so later cells (including visualizations) can use them. No file saves.
 
     RULES:
     1. Add clear inline comments explaining key logic. Be concise but informative.
-    2. Use PROJECT_DIR (already defined earlier in the notebook) for any file paths. Paths must work when run from the notebook.
-    3. DO NOT save lists of prompts or intermediate data to disk. If the script saves prompts/data to a file:
-       - Replace with loading from PROJECT_DIR/data/ if the file exists. Add a print statement informing the user: "Loading prompts from [path] (saved by a previous run)."
-       - If the file does not exist, generate the prompts in-memory. Do not save them.
-    4. The chunk runs in a notebook where prior cells have already run—variables from earlier chunks in this step exist. Use them; do not redefine.
-    5. Keep the same logic and behavior. Only adapt paths, add comments, and remove unnecessary file saves.
+    2. Use PROJECT_DIR (already defined earlier in the notebook) for any file paths when LOADING external data (e.g. prompts from data/prompts.csv). Loading data from disk is allowed.
+    3. DO NOT save results to disk. Replace ALL file writes with variable assignments:
+       - json.dump(...) / with open(..., 'w') -> store in a variable (e.g. results = {...}; causal_trace_results = {...})
+       - df.to_csv(...) -> keep as DataFrame in variable
+       - plt.savefig(...) -> remove; use plt.show() if displaying
+       - Any "Saved to ..." logic -> remove; assign to variable instead
+    4. DO NOT save prompts or intermediate data. If the script saves prompts to a file, either load from PROJECT_DIR/data/ (if external data) or define them in-memory. Never write them to disk.
+    5. The chunk runs after prior cells. Variables from earlier chunks exist. Use them; do not redefine.
     6. Output ONLY executable Python code. No markdown, no code fences.
   user_prompt: |
     **Step {step_index}, chunk: {chunk_title}**
 
     **Context:** This chunk is part of an analysis. PROJECT_DIR is the project root. Variables from previous chunks may exist: {previous_vars}.
+    Later cells (including visualizations) will use variables produced here. Store all results in named variables (e.g. results_summary, causal_trace_results, all_results). Do NOT save to files.
 
-    **Original chunk** (rewrite for notebook—add inline comments, fix paths, handle data loading as described):
+    **Original chunk** (rewrite for notebook—inline comments, paths via PROJECT_DIR, replace file saves with variable assignments):
     ```python
     {chunk_content}
     ```

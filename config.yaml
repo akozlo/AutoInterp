@@ -35,7 +35,7 @@ analysis:
   execution:
     timeout: 180  # seconds
     max_memory: 4000  # MB
-    sandbox: true
+    sandbox: false  # Disabled: use venv instead (Docker requires socket permission)
   executor_type: "sandbox"
   output_format: "json"
   timeout_per_analysis: 300

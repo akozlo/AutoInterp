@@ -1524,24 +1524,97 @@ class ReportGenerator:
             q_content = raw_text
         return {"question": q_content, "rationale": rationale_content, "procedure": procedure_content, "title": title_content}
 
+    # Exclude: Python keywords, built-ins, loop vars, and common non-output names.
+    # No allowlist—extraction is generalizable to any interpretability analysis.
+    _ANALYSIS_VAR_EXCLUDE = frozenset({
+        "if", "elif", "else", "for", "while", "with", "def", "class", "return", "try",
+        "except", "finally", "and", "or", "not", "in", "is", "lambda", "yield",
+        "type", "id", "format", "str", "int", "float", "list", "dict", "set", "tuple",
+        "len", "range", "enumerate", "zip", "map", "filter", "open", "print",
+        "i", "j", "k", "n", "m", "x", "y", "z", "f", "e", "p", "v", "c",
+        "tmp", "temp", "val", "item", "key", "idx", "_", "self", "cls",
+    })
+
     def _extract_analysis_variables(self, code: str) -> List[str]:
-        """Extract likely variable names from analysis code for viz adapter context."""
+        """
+        Extract variable names from analysis code using exclude-only heuristics.
+        Generalizable to any interpretability analysis (causal tracing, attention, SAEs, etc.).
+        """
         import re
+        seen = set()
         vars_found = []
-        # Top-level assignments: name = 
+
+        # Assignment targets: name = ...
         for m in re.finditer(r'^\s*(\w+)\s*=', code, re.MULTILINE):
-            name = m.group(1)
-            if not name.startswith('_') and name not in ('if', 'elif', 'else', 'for', 'while', 'with', 'def', 'class'):
-                vars_found.append(name)
-        # Common patterns: model, activations, tokens, etc.
-        for pattern in [r'\b(model|activations|logits|cache|tokens|indices|attention_patterns|resid)\b',
-                       r'\b(df|dataframe|results|output)\b',
-                       r'\b(fig|ax|plt)\b']:
-            for m in re.finditer(pattern, code, re.IGNORECASE):
-                v = m.group(1).lower()
-                if v not in vars_found:
-                    vars_found.append(v)
-        return list(dict.fromkeys(vars_found))[:25]  # dedupe, cap
+            name = m.group(1).lower()
+            if name in self._ANALYSIS_VAR_EXCLUDE or name in seen:
+                continue
+            if len(name) == 1 and name != "_":
+                continue
+            seen.add(name)
+            vars_found.append((name, self._variable_relevance_score(name)))
+
+        # Also catch "for x in" style (we exclude single-char in exclude, but multi-char is useful)
+        for m in re.finditer(r'\bfor\s+(\w+)\s+in\s+', code):
+            name = m.group(1).lower()
+            if name not in self._ANALYSIS_VAR_EXCLUDE and name not in seen and len(name) > 1:
+                seen.add(name)
+                vars_found.append((name, 0))  # Lower relevance for loop vars
+
+        # Sort by relevance (higher first), then dedupe and take top N
+        vars_found.sort(key=lambda x: -x[1])
+        result = list(dict.fromkeys(v[0] for v in vars_found))
+        return result[:35]
+
+    def _variable_relevance_score(self, name: str) -> int:
+        """Score variable by how likely it is to hold analysis output (higher = more relevant)."""
+        score = 0
+        name_lower = name.lower()
+        # Output-like suffixes
+        if any(name_lower.endswith(s) for s in ("results", "summary", "output", "matrix", "profile", "scores", "weights")):
+            score += 3
+        if any(s in name_lower for s in ("cache", "activation", "logits", "embedding")):
+            score += 2
+        if any(s in name_lower for s in ("model", "df", "data", "fig", "ax")):
+            score += 2
+        # Longer names often more substantive
+        if len(name) >= 8:
+            score += 1
+        return score
+
+    async def _extract_visualization_variables_llm(self, analysis_code: str) -> Optional[List[str]]:
+        """
+        Use LLM to extract variable names a visualization would need from analysis code.
+        Generalizable to any interpretability analysis type.
+        """
+        section_key = "notebook_variable_extractor"
+        if not self.llm_interface or not getattr(self, "reporter_prompts", None) or section_key not in self.reporter_prompts:
+            return None
+        try:
+            prompt_config = self.reporter_prompts[section_key]
+            user_prompt = prompt_config.get("user_prompt", "").format(
+                analysis_code=analysis_code[:8000]
+            )
+            response = await self.llm_interface.generate(
+                prompt=user_prompt,
+                system_message=prompt_config.get("system_prompt", "Extract variable names."),
+                agent_name="reporter"
+            )
+            if not response or not response.strip():
+                return None
+            # Parse comma-separated list
+            raw = response.strip()
+            if "```" in raw:
+                m = re.search(r"```(?:[\w]*)\s*([\s\S]*?)```", raw)
+                if m:
+                    raw = m.group(1).strip()
+            vars_list = [v.strip().lower() for v in raw.split(",") if v.strip()]
+            vars_list = [v for v in vars_list if v not in self._ANALYSIS_VAR_EXCLUDE]
+            return vars_list[:40] if vars_list else None
+        except Exception as e:
+            if hasattr(self, "logger"):
+                self.logger.debug(f"LLM variable extraction failed: {e}")
+            return None
 
     async def generate_jupyter_notebook(self, 
                                         question: Union[str, Dict[str, Any]],
@@ -1559,7 +1632,47 @@ class ReportGenerator:
             raise ValueError("output_path must be provided")
 
         print(f"Generating self-contained Jupyter Notebook at {output_path}...")
-        
+        use_minimal = False
+        for attempt in range(2):
+            try:
+                path = await self._generate_jupyter_notebook_impl(
+                    question=question,
+                    analysis_results=analysis_results,
+                    evaluation_results=evaluation_results,
+                    visualizations=visualizations,
+                    task_config=task_config,
+                    title=title,
+                    output_path=output_path,
+                    use_minimal_adaptations=use_minimal,
+                )
+                validation_ok = self._validate_notebook_runs(path)
+                if validation_ok:
+                    print(f"[AUTOINTERP] Notebook generation complete and validated at {path}")
+                    return path
+                if attempt == 0:
+                    print("[AUTOINTERP] Notebook validation failed, regenerating with minimal adaptations...")
+                    use_minimal = True
+                    continue
+                print(f"[AUTOINTERP] Notebook saved at {path} (validation reported errors - review before use)")
+                return path
+            except Exception as e:
+                if attempt == 0:
+                    print(f"[AUTOINTERP] Notebook generation failed: {e}")
+                    print("[AUTOINTERP] Retrying with minimal adaptations...")
+                    use_minimal = True
+                    continue
+                raise
+        return output_path  # unreachable
+
+    async def _generate_jupyter_notebook_impl(self,
+                                        question: Union[str, Dict[str, Any]],
+                                        analysis_results: Dict[str, Any],
+                                        evaluation_results: Dict[str, Any],
+                                        visualizations: Dict[str, str],
+                                        task_config: Optional[Dict[str, Any]] = None,
+                                        title: Optional[str] = None,
+                                        output_path: Optional[Path] = None,
+                                        use_minimal_adaptations: bool = False) -> Path:
         # --- 1. Initialize Notebook & Metadata ---
         nb = nbformat.v4.new_notebook()
         nb.metadata = {
@@ -1581,17 +1694,21 @@ class ReportGenerator:
         guidance_md = """## How to Run This Notebook
 
 1. **Environment**: Python 3.10+ recommended. CUDA-capable GPU recommended for transformer models.
-2. **Install dependencies**: Run the setup cell below first. Uncomment the `pip install` line if packages are missing.
-3. **Execution order**: Run all cells from top to bottom (Cell → Run All). Do not skip cells.
-4. **Paths**: The notebook sets `PROJECT_DIR` and changes to the project directory. Ensure you are in the correct project folder.
+2. **First run**: Execute the setup cell to install packages and load imports. Comment out the `pip install` line after the first run to speed up subsequent runs.
+3. **Execution**: Run all cells from top to bottom (Cell → Run All). Do not skip cells; later cells depend on variables from earlier ones.
+4. **Paths**: The notebook sets `PROJECT_DIR` and changes to the project directory. Place this notebook in the project's `reports/` folder for paths to resolve correctly.
 5. **Output**: All visualizations display inline. No files are saved from this notebook.
 """
         nb.cells.append(nbformat.v4.new_markdown_cell(guidance_md))
 
         # --- 3. Markdown Header & Intro ---
-        display_title = title or "AutoInterp Analysis Report"
         raw_text = question.get("text", str(question)) if isinstance(question, dict) else str(question)
-        parsed = await self._parse_question_robustly(raw_text)
+        try:
+            parsed = await self._parse_question_robustly(raw_text)
+        except Exception as e:
+            self.logger.warning(f"Question parsing failed: {e}, using raw text")
+            parsed = {"question": raw_text, "rationale": "", "procedure": "", "title": "AutoInterp Analysis Report"}
+        display_title = title or parsed.get("title", "").strip() or "AutoInterp Analysis Report"
         q_content = parsed["question"]
         rationale_content = parsed["rationale"]
         procedure_content = parsed["procedure"]
@@ -1634,31 +1751,54 @@ print(f"Working directory: {{os.getcwd()}}")
         # Experiment Setup section with configuration
         setup_md = (
             "## Experiment Setup\n\n"
-            "**What:** Installs required packages (if needed) and imports the core libraries for mechanistic interpretability—torch, transformer_lens, matplotlib, etc.\n\n"
-            "**Why:** The analysis code depends on these packages. Running the `pip install` cell once ensures a compatible environment. The imports match what the analysis executor injects when running scripts standalone.\n\n"
+            "**What:** Installs required packages and loads all imports needed for this notebook. One unified import cell at the top; no duplicate imports in later cells.\n\n"
+            "**Why:** The analysis and visualization code depend on these packages. Run this cell once; comment out the `pip install` line after the first run to speed up subsequent runs.\n\n"
             "**Configuration:**"
         )
         if task_config:
-            if "model" in task_config:
-                setup_md += f"\n- **Model:** `{task_config['model'].get('name', 'Unknown')}`"
+            model_cfg = task_config.get("model") or {}
+            if model_cfg:
+                setup_md += f"\n- **Model:** `{model_cfg.get('name', 'Unknown')}`"
             if "dataset" in task_config:
                 setup_md += f"\n- **Dataset:** `{task_config.get('dataset', 'Unknown')}`"
         nb.cells.append(nbformat.v4.new_markdown_cell(setup_md))
         
-        # --- 5. Dynamic Environment Setup (pip + imports) ---
-        nb.cells.append(self._create_setup_cell(analysis_results))
+        # --- 5. Placeholder for Dynamic Setup (will be filled after we collect all code) ---
+        setup_cell_index = len(nb.cells)
+        nb.cells.append(new_code_cell("# Setup cell - populated below"))
         
-        # --- 6. Process Analysis Steps (1:1 mapping to executed scripts) ---
+        # --- 6. Process Analysis Steps (only successful, sorted by analysis number) ---
         nb.cells.append(nbformat.v4.new_markdown_cell(
             "## Analysis Steps\n\n"
             "The following cells replicate the analysis. Each step is split by function/class. "
             "Run all cells in order; later visualization cells use variables from these steps."
         ))
         analyses = analysis_results.get("analyses", [])
-        successful_steps = [a for a in analyses if a.get("status") == "success"]
-        if not successful_steps and analyses:
-            successful_steps = analyses  # Fallback to showing everything if no explicit success
+        # Filter to steps that executed successfully (executor uses "success"; some may use "status")
+        def _is_success(step: Dict[str, Any]) -> bool:
+            if step.get("success") is False:
+                return False
+            if step.get("success") is True:
+                return True
+            return step.get("status") == "success"
+        successful_steps = [a for a in analyses if _is_success(a)]
+        if not successful_steps:
+            nb.cells.append(nbformat.v4.new_markdown_cell(
+                "**No successful analysis scripts were found.**\n\n"
+                "All analyses failed execution or no analyses were run. Re-run the pipeline to generate "
+                "successful analyses before this notebook can reproduce the results."
+            ))
+        # Sort by analysis number so order is consistent (analysis_1, analysis_2, ...)
+        def _sort_key(s):
+            n = self._extract_analysis_number_from_step(s)
+            return (n if n is not None else 999,)
+        successful_steps = sorted(successful_steps, key=_sort_key)
+        # Include only the FINAL successful analysis to avoid redundant steps. Each iteration
+        # refines the same question; the last one has the most complete, correct implementation.
+        if len(successful_steps) > 1:
+            successful_steps = [successful_steps[-1]]
         
+        all_notebook_code = []
         for i, step in enumerate(successful_steps, 1):
             # Load code from step or script_path; fallback to final attempt from disk
             raw_code = self._get_analysis_code(step, step_index=i)
@@ -1671,21 +1811,31 @@ print(f"Working directory: {{os.getcwd()}}")
             # B. Generate Explanation (Rationale + Alternatives)
             raw_result = step.get("results", "")
             result_output = raw_result.get("stdout", "") if isinstance(raw_result, dict) else str(raw_result)
-            
-            explanation_md = await self._generate_step_explanation(i, clean_code, result_output)
+            try:
+                explanation_md = await self._generate_step_explanation(i, clean_code, result_output)
+            except Exception as e:
+                self.logger.warning(f"Step explanation failed for step {i}: {e}")
+                explanation_md = f"## Step {i}: Analysis Execution\n\n*Explanation generation failed: {e}*"
             nb.cells.append(nbformat.v4.new_markdown_cell(explanation_md))
 
-            # C. Modularize into chunks, adapt each for notebook, and add descriptions
+            # C. Modularize into chunks, adapt each for notebook (skip import chunks - single import cell at top)
             code_chunks = self._split_code_into_logical_chunks(clean_code)
             previous_vars_in_step = []
 
             for chunk in code_chunks:
-                desc = await self._generate_chunk_description(chunk["content"], chunk["title"])
+                if chunk["title"] == "Imports & Dependencies":
+                    all_notebook_code.append(chunk["content"])
+                    continue
+                try:
+                    desc = await self._generate_chunk_description(chunk["content"], chunk["title"])
+                except Exception as e:
+                    self.logger.warning(f"Chunk description failed: {e}")
+                    desc = chunk["title"]
                 chunk_md = f"**{chunk['title']}**\n\n{desc}"
                 nb.cells.append(nbformat.v4.new_markdown_cell(chunk_md))
 
-                if chunk["title"] == "Imports & Dependencies":
-                    content = chunk["content"]
+                if use_minimal_adaptations:
+                    content = self._adapt_chunk_minimal(chunk["content"])
                 else:
                     content = await self._adapt_chunk_for_notebook(
                         chunk_content=chunk["content"],
@@ -1693,18 +1843,20 @@ print(f"Working directory: {{os.getcwd()}}")
                         step_index=i,
                         previous_vars=previous_vars_in_step,
                     )
-                    if not content:
-                        content = chunk["content"]
-                if chunk["title"] != "Imports & Dependencies" and content.strip():
+                if not content:
+                    content = self._adapt_chunk_minimal(chunk["content"]) or chunk["content"]
+                if content.strip():
                     header_comment = f"# Step {i}: {chunk['title']}\n"
                     content = header_comment + content
+                    all_notebook_code.append(content)
                 nb.cells.append(nbformat.v4.new_code_cell(content))
                 new_vars = self._extract_analysis_variables(content)
                 previous_vars_in_step = list(dict.fromkeys(previous_vars_in_step + new_vars))
             
-            # D. Output Summary (no truncation - preserve important results)
+            # D. Output Summary (filter out file-save lines; notebook stores results in variables)
             if result_output:
-                nb.cells.append(nbformat.v4.new_markdown_cell(f"**Verifiable Output:**\n```text\n{result_output}\n```"))
+                filtered_output = self._filter_verifiable_output_for_notebook(result_output)
+                nb.cells.append(nbformat.v4.new_markdown_cell(f"**Verifiable Output:**\n```text\n{filtered_output}\n```"))
 
             # E. Visualization for this analysis step - LLM adapts for notebook (use variables, display inline)
             analysis_name = self._extract_analysis_name(step, i)
@@ -1713,29 +1865,46 @@ print(f"Working directory: {{os.getcwd()}}")
                 if viz_code:
                     clean_viz_raw = self._sanitize_code(viz_code)
                     analysis_code_for_step = clean_code
-                    available_vars = self._extract_analysis_variables(analysis_code_for_step)
-                    adapted_viz = await self._adapt_viz_for_notebook(
-                        analysis_code_summary=analysis_code_for_step[:4000],
-                        available_variables=available_vars,
-                        original_viz_code=clean_viz_raw
-                    )
+                    if use_minimal_adaptations:
+                        adapted_viz = self._adapt_viz_minimal(clean_viz_raw)
+                    else:
+                        try:
+                            available_vars = await self._extract_visualization_variables_llm(analysis_code_for_step)
+                        except Exception:
+                            available_vars = self._extract_analysis_variables(analysis_code_for_step)
+                        if not available_vars:
+                            available_vars = self._extract_analysis_variables(analysis_code_for_step)
+                        adapted_viz = await self._adapt_viz_for_notebook(
+                            analysis_code_summary=analysis_code_for_step[:4000],
+                            available_variables=available_vars,
+                            original_viz_code=clean_viz_raw
+                        )
+                        if not adapted_viz:
+                            adapted_viz = self._adapt_viz_minimal(clean_viz_raw)
+                            self.logger.info(f"Using minimal viz adaptation for step {i} (LLM failed)")
                     if adapted_viz:
+                        all_notebook_code.append(adapted_viz)
                         if "plt.show()" not in adapted_viz and "fig.show()" not in adapted_viz and "display(" not in adapted_viz:
                             adapted_viz = adapted_viz.rstrip() + "\n\nplt.show()  # Display figure inline"
-                        viz_explanation = await self._generate_viz_explanation(
-                            step_index=i,
-                            result_excerpt=result_output[:1500],
-                            viz_code_excerpt=adapted_viz[:2000],
-                        )
+                        try:
+                            viz_explanation = await self._generate_viz_explanation(
+                                step_index=i,
+                                result_excerpt=result_output[:1500],
+                                viz_code_excerpt=adapted_viz[:2000],
+                            )
+                        except Exception as e:
+                            self.logger.warning(f"Viz explanation failed: {e}")
+                            viz_explanation = "*Visualization for this analysis step. Uses variables from above.*"
                         nb.cells.append(nbformat.v4.new_markdown_cell(
                             f"### Visualization for Step {i}\n\n{viz_explanation}\n\n"
                             f"*Uses variables from the analysis cells above. Displays inline (no file save).*"
                         ))
                         nb.cells.append(nbformat.v4.new_code_cell(adapted_viz))
                     else:
+                        err_msg = getattr(self, '_last_viz_error', 'Unknown error')
                         nb.cells.append(nbformat.v4.new_markdown_cell(
                             f"### Visualization for Step {i}\n\n"
-                            f"*Visualization adaptation failed: {getattr(self, '_last_viz_error', 'Unknown error')}*"
+                            f"*Visualization adaptation failed: {err_msg}*"
                         ))
                 else:
                     nb.cells.append(nbformat.v4.new_markdown_cell(
@@ -1743,7 +1912,12 @@ print(f"Working directory: {{os.getcwd()}}")
                         f"*Visualization script not found on disk. Re-run the pipeline to regenerate.*"
                     ))
 
-        # --- 5. Evaluation & Conclusion ---
+        # --- 7. Replace placeholder with unified setup cell (all imports from entire notebook) ---
+        combined_code = "\n\n".join(all_notebook_code)
+        unified_setup_cell = self._create_setup_cell_from_code(combined_code)
+        nb.cells[setup_cell_index] = unified_setup_cell
+
+        # --- 8. Evaluation & Conclusion ---
         conclusion = evaluation_results.get("conclusion", "Analysis Complete")
         if isinstance(conclusion, dict): conclusion = str(conclusion)
             
@@ -1757,17 +1931,10 @@ print(f"Working directory: {{os.getcwd()}}")
 """
         nb.cells.append(nbformat.v4.new_markdown_cell(eval_md))
         
-        # --- 7. Save File ---
+        # --- 9. Save File ---
         with open(output_path, 'w', encoding='utf-8') as f:
             nbformat.write(nb, f)
 
-        # --- 8. Validate notebook runs ---
-        validation_ok = self._validate_notebook_runs(output_path)
-        if validation_ok:
-            print(f"[AUTOINTERP] Notebook generation complete and validated at {output_path}")
-        else:
-            print(f"[AUTOINTERP] Notebook saved at {output_path} (validation run reported errors - review before use)")
-            
         return output_path
 
     def _validate_notebook_runs(self, nb_path: Path, timeout: int = 300) -> bool:
@@ -1821,35 +1988,42 @@ print(f"Working directory: {{os.getcwd()}}")
     ) -> Optional[str]:
         """
         Rewrite a code chunk for notebook context: inline comments, PROJECT_DIR paths, no prompt saves.
+        Retries once on failure before returning None.
         """
         section_key = "notebook_chunk_adapter"
         if not self.llm_interface or not hasattr(self, "reporter_prompts") or section_key not in self.reporter_prompts:
             return None
-        try:
-            prompt_config = self.reporter_prompts[section_key]
-            user_prompt = prompt_config.get("user_prompt", "").format(
-                step_index=step_index,
-                chunk_title=chunk_title,
-                previous_vars=", ".join(previous_vars) if previous_vars else "(none yet)",
-                chunk_content=chunk_content[:8000],
-            )
-            response = await self.llm_interface.generate(
-                prompt=user_prompt,
-                system_message=prompt_config.get("system_prompt", "Adapt chunk for notebook."),
-                agent_name="reporter",
-            )
-            if not response or not response.strip():
+        for attempt in range(2):
+            try:
+                prompt_config = self.reporter_prompts[section_key]
+                user_prompt = prompt_config.get("user_prompt", "").format(
+                    step_index=step_index,
+                    chunk_title=chunk_title,
+                    previous_vars=", ".join(previous_vars) if previous_vars else "(none yet)",
+                    chunk_content=chunk_content[:8000],
+                )
+                response = await self.llm_interface.generate(
+                    prompt=user_prompt,
+                    system_message=prompt_config.get("system_prompt", "Adapt chunk for notebook."),
+                    agent_name="reporter",
+                )
+                if not response or not response.strip():
+                    if attempt == 0:
+                        continue
+                    return None
+                code = response.strip()
+                if "```" in code:
+                    m = re.search(r"```(?:python)?\s*([\s\S]*?)```", code)
+                    if m:
+                        code = m.group(1).strip()
+                return self._sanitize_code(code)
+            except Exception as e:
+                if hasattr(self, "logger"):
+                    self.logger.warning(f"Chunk adaptation failed (attempt {attempt + 1}/2): {e}")
+                if attempt == 0:
+                    continue
                 return None
-            code = response.strip()
-            if "```" in code:
-                m = re.search(r"```(?:python)?\s*([\s\S]*?)```", code)
-                if m:
-                    code = m.group(1).strip()
-            return self._sanitize_code(code)
-        except Exception as e:
-            if hasattr(self, "logger"):
-                self.logger.warning(f"Chunk adaptation failed: {e}")
-            return None
+        return None
 
     async def _generate_viz_explanation(
         self,
@@ -1887,38 +2061,69 @@ print(f"Working directory: {{os.getcwd()}}")
     ) -> Optional[str]:
         """
         Use LLM to adapt standalone viz script for notebook: use analysis variables, display inline, no saves.
+        Retries once on failure before returning None.
         """
+        self._last_viz_error = None
         section_key = "notebook_viz_adapter"
         if not self.llm_interface or not hasattr(self, "reporter_prompts") or section_key not in self.reporter_prompts:
             self._last_viz_error = "Prompt 'notebook_viz_adapter' not found"
             return None
-        try:
-            prompt_config = self.reporter_prompts[section_key]
-            user_prompt = prompt_config.get("user_prompt", "").format(
-                analysis_code_summary=analysis_code_summary,
-                available_variables=", ".join(available_variables) if available_variables else "(infer from analysis code)",
-                original_viz_code=original_viz_code[:6000]
-            )
-            response = await self.llm_interface.generate(
-                prompt=user_prompt,
-                system_message=prompt_config.get("system_prompt", "Adapt visualization for notebook."),
-                agent_name="reporter"
-            )
-            if not response or not response.strip():
-                self._last_viz_error = "LLM returned empty response"
+        for attempt in range(2):
+            try:
+                prompt_config = self.reporter_prompts[section_key]
+                user_prompt = prompt_config.get("user_prompt", "").format(
+                    analysis_code_summary=analysis_code_summary,
+                    available_variables=", ".join(available_variables) if available_variables else "(infer from analysis code)",
+                    original_viz_code=original_viz_code[:6000]
+                )
+                response = await self.llm_interface.generate(
+                    prompt=user_prompt,
+                    system_message=prompt_config.get("system_prompt", "Adapt visualization for notebook."),
+                    agent_name="reporter"
+                )
+                if not response or not response.strip():
+                    self._last_viz_error = "LLM returned empty response"
+                    if attempt == 0:
+                        continue
+                    return None
+                code = response.strip()
+                if "```" in code:
+                    m = re.search(r"```(?:python)?\s*([\s\S]*?)```", code)
+                    if m:
+                        code = m.group(1).strip()
+                return self._sanitize_code(code)
+            except Exception as e:
+                self._last_viz_error = str(e)
+                if hasattr(self, "logger"):
+                    self.logger.warning(f"Viz adaptation failed (attempt {attempt + 1}/2): {e}")
+                if attempt == 0:
+                    continue
                 return None
-            code = response.strip()
-            if "```" in code:
-                import re
-                m = re.search(r"```(?:python)?\s*([\s\S]*?)```", code)
-                if m:
-                    code = m.group(1).strip()
-            return self._sanitize_code(code)
-        except Exception as e:
-            self._last_viz_error = str(e)
-            if hasattr(self, "logger"):
-                self.logger.warning(f"Viz adaptation failed: {e}")
-            return None
+        return None
+
+    def _adapt_viz_minimal(self, viz_code: str) -> str:
+        """
+        Minimal adaptation of viz code for notebook: remove savefig/write, add show. No LLM.
+        Used as fallback when LLM adaptation fails.
+        """
+        code = self._sanitize_code(viz_code)
+        lines = code.split('\n')
+        out = []
+        for line in lines:
+            if re.search(r'\.(savefig|write_image|write_html)\s*\(', line):
+                continue
+            out.append(line)
+        code = '\n'.join(out).rstrip()
+        if 'plt.show()' not in code and 'fig.show()' not in code and 'display(' not in code:
+            code += '\n\nplt.show()  # Display inline'
+        return code
+
+    def _adapt_chunk_minimal(self, chunk_content: str) -> str:
+        """
+        Minimal adaptation: sanitize only. No LLM; used when chunk adaptation fails.
+        Path setup is already done via PROJECT_DIR in an earlier cell.
+        """
+        return self._sanitize_code(chunk_content)
 
     async def _generate_step_explanation(self, index: int, code: str, result: str) -> str:
         """
@@ -1950,6 +2155,23 @@ print(f"Working directory: {{os.getcwd()}}")
             if hasattr(self, 'logger'):
                 self.logger.error(f"Error generating explanation for step {index}: {e}")
             return f"{header}\n*Explanation generation failed: {type(e).__name__}: {str(e)}*"
+
+    def _filter_verifiable_output_for_notebook(self, result_output: str) -> str:
+        """
+        Remove lines about saving to disk from displayed output. The notebook stores results
+        in variables instead of files, so such lines would be misleading.
+        """
+        import re
+        lines = result_output.split("\n")
+        filtered = []
+        for line in lines:
+            # Skip lines that mention saving results to a file
+            if re.search(r"Saved\s+\w+\s+to\s+|saved\s+to\s+|Results\s+saved\s+to", line, re.IGNORECASE):
+                continue
+            if re.search(r"Writing\s+to\s+.*\.(json|csv|png|pdf)", line, re.IGNORECASE):
+                continue
+            filtered.append(line)
+        return "\n".join(filtered).rstrip()
 
     def _sanitize_code(self, code: str) -> str:
         """
@@ -2060,26 +2282,25 @@ print(f"Working directory: {{os.getcwd()}}")
                 self.logger.warning(f"Chunk description generation failed: {e}")
             return f"*Chunk description failed: {type(e).__name__}: {str(e)}*"
 
-    def _extract_analysis_name(self, step: Dict[str, Any], step_index: int) -> str:
-        """
-        Extract analysis name (e.g. 'analysis_1') from step for viz lookup.
-        Does NOT assume step_index equals analysis number—derives from script_path.
-        Falls back to step_index only when path cannot be parsed.
-        """
+    def _extract_analysis_number_from_step(self, step: Dict[str, Any]) -> Optional[int]:
+        """Extract analysis number from step (e.g. 3 from script_path .../analysis_3/...)."""
         script_path = step.get("script_path", "")
         if script_path:
-            # Match analysis_N in path (e.g. .../analysis_scripts/analysis_3/attempt_2/...)
             match = re.search(r"analysis_(\d+)", str(script_path))
             if match:
-                return f"analysis_{match.group(1)}"
-        return f"analysis_{step_index}"
+                return int(match.group(1))
+        return None
+
+    def _extract_analysis_name(self, step: Dict[str, Any], step_index: int) -> str:
+        """Extract analysis name (e.g. 'analysis_1') from step for viz lookup."""
+        num = self._extract_analysis_number_from_step(step)
+        return f"analysis_{num}" if num is not None else f"analysis_{step_index}"
 
     def _get_analysis_code(self, step: Dict[str, Any], step_index: Optional[int] = None) -> str:
         """
         Get analysis code from step. Prefers script_path (the actual executed script).
-        Falls back to resolving the final attempt from disk when script_path is missing
-        or the file does not exist (e.g. project moved). Ensures the FINAL attempt
-        script is replicated, not failed intermediate attempts.
+        Falls back to resolving the final attempt from disk. Uses analysis number from
+        step (not loop index) for correct disk lookup when steps are filtered.
         """
         code = step.get("code", "").strip()
         if code:
@@ -2091,19 +2312,21 @@ print(f"Working directory: {{os.getcwd()}}")
                     return f.read()
             except Exception as e:
                 self.logger.warning(f"Could not read analysis script at {script_path}: {e}")
-        # Fallback: resolve final attempt from disk (analysis_N/attempt_M/analysis_*.py)
+        analysis_num = self._extract_analysis_number_from_step(step)
+        if analysis_num is not None:
+            return self._resolve_final_script_from_disk(analysis_num)
         if step_index is not None:
             return self._resolve_final_script_from_disk(step_index)
         return ""
 
-    def _resolve_final_script_from_disk(self, step_index: int) -> str:
+    def _resolve_final_script_from_disk(self, analysis_num: int) -> str:
         """
         Resolve the final (highest) attempt script from the analysis_scripts directory.
         Uses analysis_{n}/attempt_{m}/analysis_*.py - takes highest attempt number.
         """
         try:
             analysis_scripts_dir = self.path_resolver.get_path("analysis_scripts")
-            analysis_dir = analysis_scripts_dir / f"analysis_{step_index}"
+            analysis_dir = analysis_scripts_dir / f"analysis_{analysis_num}"
             if not analysis_dir.exists():
                 return ""
             attempt_dirs = []
@@ -2124,14 +2347,14 @@ print(f"Working directory: {{os.getcwd()}}")
                     with open(f, "r", encoding="utf-8") as fp:
                         return fp.read()
         except Exception as e:
-            self.logger.warning(f"Could not resolve final script from disk for step {step_index}: {e}")
+            self.logger.warning(f"Could not resolve final script from disk for analysis_{analysis_num}: {e}")
         return ""
 
     def _load_visualization_code(self, viz_name: str) -> Optional[str]:
         """
         Load the FINAL successful visualization Python code from disk. Prefers
-        retry scripts (later attempts) over initial attempts. Scripts are named
-        visualization_{viz_name}_{timestamp}.py or ..._retry{N}.py.
+        retry scripts (later attempts) over initial attempts. Skips files that
+        contain only a plan (markdown) instead of executable Python.
         """
         viz_dir = self.path_resolver.ensure_path("visualizations")
         if not viz_dir.exists():
@@ -2142,51 +2365,95 @@ print(f"Working directory: {{os.getcwd()}}")
             return None
 
         def sort_key(p: Path) -> tuple:
-            """Prefer retry scripts (later attempts); then by mtime."""
+            """Prefer retry scripts (later attempts); then by mtime. Descending so retries come first."""
             name = p.name
-            # Extract retry number: visualization_analysis_1_xxx_retry2.py -> 2
             retry_match = re.search(r"_retry(\d+)\.py$", name)
             retry_num = int(retry_match.group(1)) if retry_match else 0
-            # (has_retry, retry_num, -mtime) so retries come first, higher retry first
             has_retry = 1 if "_retry" in name else 0
             return (has_retry, retry_num, -p.stat().st_mtime)
 
-        matches = sorted(all_matches, key=sort_key)
-        try:
-            with open(matches[0], "r", encoding="utf-8") as f:
-                return f.read()
-        except Exception as e:
-            self.logger.warning(f"Could not read visualization script {matches[0]}: {e}")
+        def is_executable_python(content: str) -> bool:
+            """True if content looks like Python code, not a plan/markdown."""
+            if not content or len(content.strip()) < 50:
+                return False
+            # Plan files are markdown (start with **) and lack Python plotting code
+            stripped = content.strip()
+            if stripped.startswith("**") and "import " not in content:
+                return False
+            return "import " in content or "plt." in content or "fig." in content or "ax." in content
+
+        matches = sorted(all_matches, key=sort_key, reverse=True)  # Retries first
+        for p in matches:
+            try:
+                content = p.read_text(encoding="utf-8")
+                if is_executable_python(content):
+                    return content
+            except Exception as e:
+                self.logger.warning(f"Could not read visualization script {p}: {e}")
         return None
 
-    def _get_dynamic_requirements(self, analysis_results: Dict[str, Any]) -> List[str]:
-        """Scans code to find necessary pip packages."""
+    def _get_imports_and_requirements_from_code(self, all_code: str) -> Tuple[List[str], List[str]]:
+        """Extract import lines and pip requirements from code. Returns (import_lines, pip_packages)."""
         import re
         IMPORT_TO_PIP = {
             "sklearn": "scikit-learn", "cv2": "opencv-python", "PIL": "Pillow",
-            "yaml": "PyYAML", "transformer_lens": "transformer_lens", 
+            "yaml": "PyYAML", "transformer_lens": "transformer_lens",
             "plotly": "plotly", "wandb": "wandb", "jaxtyping": "jaxtyping"
         }
-        STDLIB = {"os", "sys", "json", "math", "re", "time", "typing", "pathlib", "numpy", "pandas", "torch"}
-        
-        analyses = analysis_results.get("analyses", [])
-        all_code = "\n".join([self._get_analysis_code(a, step_index=i + 1) for i, a in enumerate(analyses)])
-        matches = re.findall(r'^\s*(?:from|import)\s+(\w+)', all_code, re.MULTILINE)
-        
-        found = {"transformer_lens", "torch", "einops", "jaxtyping"} # Core defaults
-        for module in matches:
-            if module not in STDLIB:
-                found.add(IMPORT_TO_PIP.get(module, module))
-        return sorted(list(found))
+        # Python stdlib modules - never pip-install these
+        STDLIB = {
+            "os", "sys", "json", "math", "re", "time", "typing", "pathlib", "collections",
+            "random", "logging", "warnings", "datetime", "io", "subprocess", "tempfile",
+            "argparse", "functools", "itertools", "copy", "hashlib", "struct", "base64",
+        }
+        seen_imports = set()
+        import_lines = []
+        for m in re.finditer(r'^\s*(?:from\s+\S+\s+import\s+.+|import\s+\S+)', all_code, re.MULTILINE):
+            line = m.group(0).strip()
+            if line and line not in seen_imports:
+                seen_imports.add(line)
+                import_lines.append(line)
+        modules = re.findall(r'^\s*(?:from|import)\s+(\w+)', all_code, re.MULTILINE)
+        pip_pkgs = {"transformer_lens", "torch", "einops", "jaxtyping"}
+        for mod in modules:
+            if mod not in STDLIB:
+                pip_pkgs.add(IMPORT_TO_PIP.get(mod, mod))
+        return import_lines, sorted(list(pip_pkgs))
 
-    def _create_setup_cell(self, analysis_results: Dict[str, Any]) -> nbformat.NotebookNode:
+    def _create_setup_cell_from_code(self, all_code: str) -> nbformat.NotebookNode:
         """
-        Creates the environment setup cell with dynamic pip install and imports.
-        Ensures the notebook is self-contained and runnable.
+        Creates a single unified setup cell with all imports needed by the notebook.
+        Extracts imports dynamically from the provided code; merges with standard imports.
         """
-        requirements = self._get_dynamic_requirements(analysis_results)
-        pip_line = f"# Install dependencies (run once; comment out if already installed)\n!pip install -q {' '.join(requirements)}\n\n"
-        content = pip_line + NOTEBOOK_STANDARD_IMPORTS
+        import_lines, requirements = self._get_imports_and_requirements_from_code(all_code)
+        pip_line = "# Install dependencies (run once; comment out after first run)\n!pip install -q " + " ".join(requirements) + "\n\n"
+        base_imports = [
+            "import os", "import sys", "import json", "import random", "import logging", "import warnings",
+            "warnings.filterwarnings(\"ignore\", \"Can't initialize NVML\")",
+            "import numpy as np", "import torch", "import pandas as pd", "import matplotlib.pyplot as plt",
+            "import seaborn as sns", "import scipy", "from scipy import stats", "from scipy.stats import pearsonr, spearmanr",
+            "import sklearn", "from sklearn import metrics, decomposition", "from tqdm.auto import tqdm", "import einops",
+            "import transformer_lens", "from transformer_lens import HookedTransformer", "import transformers",
+        ]
+
+        def _module_key(ln):
+            parts = ln.strip().replace("import ", "").replace("from ", "").split()[0]
+            return parts.split(".")[0]
+
+        seen = {_module_key(ln) for ln in base_imports if "import" in ln or "from " in ln}
+        merged = list(base_imports)
+        for line in import_lines:
+            key = _module_key(line)
+            if key not in seen:
+                seen.add(key)
+                merged.append(line)
+        imports_block = "\n".join(merged) + "\n\n"
+        runtime = """os.environ["TOKENIZERS_PARALLELISM"] = "false"
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(f"Running on {device}")
+parameters = {}
+"""
+        content = pip_line + imports_block + runtime
         return new_code_cell(content)
     
     def _get_filename_from_title(self, title: str) -> str:
