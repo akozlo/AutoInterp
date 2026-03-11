@@ -76,110 +76,6 @@ def cmd_export(args):
         export_interactive(G)
 
 
-def cmd_topic_mining(args):
-    """Run topic mining: graph / embed / hybrid modes."""
-    from topic_mining.run import run_topic_mining
-
-    graph_path = args.graph
-    if not os.path.isabs(graph_path):
-        base = os.path.dirname(os.path.abspath(__file__))
-        graph_path = os.path.join(base, graph_path)
-    if not os.path.exists(graph_path):
-        print(f"Graph path not found: {graph_path}")
-        sys.exit(1)
-
-    output_dir = args.output_dir or os.path.join(os.path.dirname(graph_path), "topic_mining")
-    result = run_topic_mining(
-        graph_path=graph_path,
-        output_dir=output_dir,
-        topic_mode=args.topic_mode,
-        hybrid_mode=args.hybrid_mode,
-        knn_k=args.knn_k,
-        sim_threshold=args.sim_threshold,
-        resolution=args.resolution,
-        embedder_backend=args.embedder_backend or "sentence-transformers",
-        embedder_model=args.embedder_model,
-        embed_cache_dir=args.embed_cache_dir,
-        top_representatives=args.top_representatives,
-        top_keywords=args.top_keywords,
-        force=args.force,
-    )
-    print(f"Topics: {len(result['topics'])}")
-    print(f"Output: {result['output_paths']}")
-
-
-def cmd_topic_package(args):
-    """Generate one topic package: sample -> topic_package.json + topic_package.md + optional topic_subgraph.graphml.
-    Uses same LLM as main flow: config from AutoInterp config.yaml (../config.yaml) when present.
-    """
-    from topic_package.run import run_topic_package
-
-    graph_path = args.graph
-    if not os.path.isabs(graph_path):
-        base = os.path.dirname(os.path.abspath(__file__))
-        graph_path = os.path.join(base, graph_path)
-    if not os.path.exists(graph_path):
-        print(f"Graph path not found: {graph_path}")
-        sys.exit(1)
-
-    llm_config = None
-    if not getattr(args, "no_llm", False):
-        # Prefer last model selected in main.py (.last_llm.json), then AutoInterp config.yaml
-        base = os.path.dirname(os.path.abspath(__file__))
-        repo_root = os.path.join(base, "..")
-        try:
-            import json
-            last_llm_path = os.path.join(repo_root, ".last_llm.json")
-            if os.path.exists(last_llm_path):
-                with open(last_llm_path) as f:
-                    llm_config = json.load(f)
-                if llm_config and (llm_config.get("provider") or llm_config.get("model")):
-                    print("Using LLM (last selected in main): {} / {} — calling model to generate topic.".format(
-                        llm_config.get("provider", ""), llm_config.get("model", "")))
-        except Exception:
-            pass
-        if not llm_config or (not llm_config.get("provider") and not llm_config.get("model")):
-            try:
-                import yaml
-                config_path = os.path.join(repo_root, "config.yaml")
-                if os.path.exists(config_path):
-                    with open(config_path) as f:
-                        root_config = yaml.safe_load(f) or {}
-                    llm_config = root_config.get("llm") or {}
-                    if llm_config and (llm_config.get("provider") or llm_config.get("model")):
-                        print("Using LLM from config.yaml: {} / {} — calling model to generate topic.".format(
-                            llm_config.get("provider", ""), llm_config.get("model", "")))
-            except Exception:
-                pass
-        if not llm_config or (not llm_config.get("provider") and not llm_config.get("model")):
-            print("No LLM config (no .last_llm.json or config.yaml). Using keyword fallback for topic (no model call).")
-            llm_config = None
-
-    output_dir = args.output_dir or os.path.join(os.path.dirname(graph_path), "topic_package")
-    result = run_topic_package(
-        graph_path=graph_path,
-        output_dir=output_dir,
-        sampling=args.sampling,
-        k=args.k,
-        community_id=args.community_id,
-        year_min=args.year_min,
-        min_in_degree=args.min_in_degree,
-        core_ratio=args.core_ratio,
-        resolution=args.resolution,
-        export_subgraph=not args.no_subgraph,
-        seed=args.seed,
-        llm_generate_fn=None,
-        llm_config=llm_config,
-    )
-    print(f"Sampled {len(result['papers'])} papers (sampling={args.sampling})")
-    pkg = result.get("package", {})
-    tt = pkg.get("topic_title") or {}
-    print(f"Topic: {tt.get('main', '(fallback)')}")
-    for k, v in result.get("output_paths", {}).items():
-        if v:
-            print(f"  {k}: {v}")
-
-
 def cmd_context_pack(args):
     """Build 3-paper context pack (seed + forward + backward), download PDFs, manifest, optional LLM question."""
     from context_pack.run import run_context_pack
@@ -221,7 +117,7 @@ def cmd_context_pack(args):
                         root = yaml.safe_load(f) or {}
                     llm_config = root.get("llm") or {}
             if llm_config and (llm_config.get("provider") or llm_config.get("model")):
-                from topic_package.llm_client import get_llm_generate_fn
+                from context_pack.llm_client import get_llm_generate_fn
                 llm_generate_fn = get_llm_generate_fn(
                     provider=llm_config.get("provider"),
                     model=llm_config.get("model"),
@@ -314,46 +210,6 @@ def main():
     export_parser.add_argument("--format", choices=["graphml", "gexf", "html", "all"],
                                default="all", help="Export format (default: all)")
     export_parser.set_defaults(func=cmd_export)
-
-    # topic-mining
-    topic_parser = subparsers.add_parser("topic-mining", help="Generate topics from citation graph (graph/embed/hybrid)")
-    topic_parser.add_argument("--graph", default="output/graph_state.json", help="Path to graph_state.json or .graphml")
-    topic_parser.add_argument("--output-dir", help="Output directory (default: <graph_dir>/topic_mining)")
-    topic_parser.add_argument("--topic-mode", choices=["graph", "embed", "hybrid"], default="graph",
-                              help="Topic generation mode (default: graph)")
-    topic_parser.add_argument("--hybrid-mode", choices=["union", "intersection"], default="union",
-                              help="For hybrid: fuse citation + kNN edges (default: union)")
-    topic_parser.add_argument("--knn-k", type=int, default=10, help="k for k-NN in embedding space (default: 10)")
-    topic_parser.add_argument("--sim-threshold", type=float, default=0.3,
-                              help="Similarity threshold for intersection hybrid (default: 0.3)")
-    topic_parser.add_argument("--resolution", type=float, default=1.0,
-                              help="Community resolution (default: 1.0)")
-    topic_parser.add_argument("--embedder-backend", choices=["sentence-transformers", "openai"], default="sentence-transformers")
-    topic_parser.add_argument("--embedder-model", help="Model name for embedder (optional)")
-    topic_parser.add_argument("--embed-cache-dir", help="Cache dir for embeddings (default: output/embeddings)")
-    topic_parser.add_argument("--top-representatives", type=int, default=10)
-    topic_parser.add_argument("--top-keywords", type=int, default=10)
-    topic_parser.add_argument("--force", action="store_true", help="Recompute even if outputs exist")
-    topic_parser.set_defaults(func=cmd_topic_mining)
-
-    # topic-package: one topic package per run (sample + topic_package.json + .md + optional subgraph)
-    pkg_parser = subparsers.add_parser("topic-package", help="Generate one topic package (sample k papers -> JSON + MD + optional subgraph)")
-    pkg_parser.add_argument("--graph", default="output/graph_state.json", help="Path to graph_state.json or .graphml")
-    pkg_parser.add_argument("--output-dir", help="Output directory (default: <graph_dir>/topic_package)")
-    pkg_parser.add_argument("--sampling", choices=["random_seed", "community"], default="random_seed",
-                            help="Sampling method (default: random_seed)")
-    pkg_parser.add_argument("--k", type=int, default=20, help="Number of papers to sample (default: 20)")
-    pkg_parser.add_argument("--community-id", type=int, default=None,
-                            help="For community: which community (0=largest, 1=2nd, ...); default 0")
-    pkg_parser.add_argument("--year-min", type=int, default=2012, help="Exclude papers before this year (random_seed)")
-    pkg_parser.add_argument("--min-in-degree", type=int, default=0, help="Exclude nodes with in_degree below this (random_seed)")
-    pkg_parser.add_argument("--core-ratio", type=float, default=0.4,
-                            help="For community: ratio of k as core (by in_degree); rest random (default: 0.4)")
-    pkg_parser.add_argument("--resolution", type=float, default=1.0, help="Community detection resolution (default: 1.0)")
-    pkg_parser.add_argument("--no-subgraph", action="store_true", help="Do not export topic_subgraph.graphml")
-    pkg_parser.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
-    pkg_parser.add_argument("--no-llm", action="store_true", help="Do not use LLM; use keyword fallback only")
-    pkg_parser.set_defaults(func=cmd_topic_package)
 
     # context-pack: seed + forward/backward -> 3 papers -> PDFs + manifest -> optional LLM question
     ctx_parser = subparsers.add_parser("context-pack", help="Build 3-paper context pack (seed + citing + cited), download PDFs, manifest, optional research question)")

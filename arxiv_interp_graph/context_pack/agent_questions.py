@@ -76,7 +76,7 @@ def run_agent_question_generation(
         return None
 
     cmd, kwargs = result
-    logger.info("Running agent question generation: %s (timeout=%ds)", cmd[0], timeout)
+    logger.debug("Running agent question generation: %s (timeout=%ds)", cmd[0], timeout)
     print(f"[AUTOINTERP] Running {cmd[0]} agent to generate research questions (timeout={timeout}s)...")
 
     try:

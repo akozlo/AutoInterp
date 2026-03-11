@@ -2,16 +2,44 @@
 Run full context pack pipeline: load graph -> seed + forward/backward -> 3 papers -> download PDFs + manifest -> optional LLM (one research question).
 """
 
+import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-try:
-    from ..topic_mining.graph_loader import load_graph_for_topic_mining
-except ImportError:
-    from topic_mining.graph_loader import load_graph_for_topic_mining
+import networkx as nx
 
 from .download import download_context_pack_pdfs, write_manifest
 from .sampling import build_context_pack
+
+
+def _load_graph(graph_path: str | Path) -> nx.DiGraph:
+    """Load citation graph from graph_state.json or GraphML/GEXF fallback."""
+    path = Path(graph_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Graph path does not exist: {path}")
+
+    if path.suffix == ".json" or path.name == "graph_state.json":
+        with open(path) as f:
+            state = json.load(f)
+        G = nx.DiGraph()
+        for entry in state["nodes"]:
+            node_id = entry.pop("id")
+            G.add_node(node_id, **entry)
+        for entry in state["edges"]:
+            src = entry.pop("source")
+            dst = entry.pop("target")
+            G.add_edge(src, dst, **entry)
+        return G
+
+    if path.suffix.lower() == ".graphml":
+        G = nx.read_graphml(path)
+    elif path.suffix.lower() == ".gexf":
+        G = nx.read_gexf(path)
+    else:
+        raise ValueError(f"Unsupported graph format: {path.suffix}. Use .json or .graphml")
+    if not isinstance(G, nx.DiGraph):
+        G = nx.DiGraph(G)
+    return G
 
 # When sending whole PDFs via OpenRouter, use the instruction-only prompt (no paper_content).
 CONTEXT_PACK_QUESTION_PROMPT_WITH_PDFS = """You are an expert in LLM interpretability research. I want you to generate a new research question in the field of AI interpretability. It should be a question that can be empirically investigated by analyzing the activations and outputs of a small open source LLM. I have attached three papers as PDFs. Use them for inspiration. Your question should be theoretically important and advance the literature in a meaningful way.
@@ -162,7 +190,7 @@ def run_context_pack(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    G = load_graph_for_topic_mining(graph_path)
+    G = _load_graph(graph_path)
     papers = build_context_pack(
         G,
         seed_id=seed_id,

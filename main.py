@@ -2067,16 +2067,13 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                     from context_pack.agent_questions import run_agent_question_generation
                     from context_pack.run import _generate_question_llm
                     from api_client import SemanticScholarClient
-                    from topic_package.llm_client import get_llm_generate_fn
-                    try:
-                        from topic_mining.graph_loader import load_graph_for_topic_mining
-                    except ImportError:
-                        from arxiv_interp_graph.topic_mining.graph_loader import load_graph_for_topic_mining
+                    from context_pack.llm_client import get_llm_generate_fn
+                    from context_pack.run import _load_graph
 
                     s2_client = SemanticScholarClient()
 
                     # Load graph and sample 3 papers
-                    G = load_graph_for_topic_mining(graph_path)
+                    G = _load_graph(graph_path)
                     papers = build_context_pack(
                         G,
                         seed_id=ctx_cfg.get("seed_id"),
@@ -2260,22 +2257,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--venv", help="Path to existing virtual environment to use", default=None)
     run_parser.add_argument("--projects-dir", help="Root directory for projects", default=None)
     run_parser.set_defaults(command="run")
-    # Topic mining: generate topics from citation graph (graph/embed/hybrid)
-    topic_parser = subparsers.add_parser("topic-mining", help="Generate topics from citation graph (graph/embed/hybrid)")
-    topic_parser.add_argument("--graph", required=True, help="Path to graph_state.json or citation_graph.graphml")
-    topic_parser.add_argument("--output-dir", help="Output directory for topics.json and report (default: <graph_dir>/topic_mining)")
-    topic_parser.add_argument("--topic-mode", choices=["graph", "embed", "hybrid"], default="graph")
-    topic_parser.add_argument("--hybrid-mode", choices=["union", "intersection"], default="union")
-    topic_parser.add_argument("--knn-k", type=int, default=10)
-    topic_parser.add_argument("--sim-threshold", type=float, default=0.3)
-    topic_parser.add_argument("--resolution", type=float, default=1.0)
-    topic_parser.add_argument("--embedder-backend", choices=["sentence-transformers", "openai"], default="sentence-transformers")
-    topic_parser.add_argument("--embedder-model", default=None)
-    topic_parser.add_argument("--embed-cache-dir", default=None)
-    topic_parser.add_argument("--top-representatives", type=int, default=10)
-    topic_parser.add_argument("--top-keywords", type=int, default=10)
-    topic_parser.add_argument("--force", action="store_true", help="Recompute even if outputs exist")
-    topic_parser.set_defaults(command="topic-mining")
 
     # context-pack: seed + forward/backward -> 3 papers -> PDFs + manifest -> optional LLM question
     ctx_parser = subparsers.add_parser("context-pack", help="Build 3-paper context pack (seed + citing + cited), PDFs + manifest, optional research question")
@@ -2289,98 +2270,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
     parser.set_defaults(command="run")
     return parser
-
-
-def get_topic_suggestions_from_mining(max_suggestions: int = 5) -> Optional[List[Dict[str, Any]]]:
-    """
-    If the interpretability citation graph and topic mining are available, return
-    a list of suggested topics (each with 'description', 'size', 'score', 'keywords').
-    Otherwise return None so the caller can fall back to LLM-generated topic.
-    """
-    pkg_root = Path(__file__).resolve().parent
-    graph_path = pkg_root / "arxiv_interp_graph" / "output" / "graph_state.json"
-    if not graph_path.exists():
-        return None
-    topics_json = graph_path.parent / "topic_mining" / "topics.json"
-    try:
-        if str(pkg_root) not in sys.path:
-            sys.path.insert(0, str(pkg_root))
-        from arxiv_interp_graph.topic_mining.run import run_topic_mining
-    except ImportError:
-        try:
-            from topic_mining.run import run_topic_mining
-        except ImportError:
-            return None
-    if not topics_json.exists():
-        try:
-            run_topic_mining(
-                graph_path=graph_path,
-                output_dir=graph_path.parent / "topic_mining",
-                topic_mode="graph",
-                force=False,
-            )
-        except Exception:
-            return None
-    if not topics_json.exists():
-        return None
-    try:
-        with open(topics_json) as f:
-            topics = json.load(f)
-    except Exception:
-        return None
-    if not topics:
-        return None
-    suggestions = []
-    for t in topics[:max_suggestions]:
-        kw = t.get("keywords") or []
-        desc = " ".join(kw[:6]) if kw else t.get("topic_id", "topic")
-        suggestions.append({
-            "description": desc,
-            "size": t.get("size", 0),
-            "score": t.get("score", 0),
-            "keywords": kw,
-        })
-    return suggestions
-
-
-def run_topic_mining_cmd(args: argparse.Namespace) -> None:
-    """Run topic mining step (graph/embed/hybrid) and write topics.json + report."""
-    # Ensure arxiv_interp_graph is importable from package root
-    pkg_root = Path(__file__).resolve().parent
-    if str(pkg_root) not in sys.path:
-        sys.path.insert(0, str(pkg_root))
-    try:
-        from arxiv_interp_graph.topic_mining.run import run_topic_mining
-    except ImportError:
-        from topic_mining.run import run_topic_mining
-    graph_path = Path(args.graph)
-    if not graph_path.is_absolute():
-        graph_path = (pkg_root / graph_path).resolve()
-    if not graph_path.exists():
-        print(f"[AUTOINTERP] ERROR: Graph path not found: {graph_path}")
-        sys.exit(1)
-    output_dir = args.output_dir
-    if not output_dir:
-        output_dir = graph_path.parent / "topic_mining"
-    output_dir = Path(output_dir)
-    result = run_topic_mining(
-        graph_path=graph_path,
-        output_dir=output_dir,
-        topic_mode=args.topic_mode,
-        hybrid_mode=args.hybrid_mode,
-        knn_k=args.knn_k,
-        sim_threshold=args.sim_threshold,
-        resolution=args.resolution,
-        embedder_backend=args.embedder_backend,
-        embedder_model=args.embedder_model,
-        embed_cache_dir=args.embed_cache_dir,
-        top_representatives=args.top_representatives,
-        top_keywords=args.top_keywords,
-        force=args.force,
-    )
-    print(f"[AUTOINTERP] Topic mining complete: {len(result['topics'])} topics")
-    for k, v in result.get("output_paths", {}).items():
-        print(f"  {k}: {v}")
 
 
 def run_context_pack_cmd(args: argparse.Namespace) -> None:
@@ -2429,7 +2318,7 @@ def run_context_pack_cmd(args: argparse.Namespace) -> None:
                     root = yaml.safe_load(f) or {}
                 llm_config = root.get("llm") or {}
             if llm_config and (llm_config.get("provider") or llm_config.get("model")):
-                from topic_package.llm_client import get_llm_generate_fn
+                from context_pack.llm_client import get_llm_generate_fn
                 llm_generate_fn = get_llm_generate_fn(
                     provider=llm_config.get("provider"),
                     model=llm_config.get("model"),
@@ -2593,23 +2482,19 @@ async def async_main(args: argparse.Namespace) -> None:
         print(f"\n{color_start}" + "="*60)
         print("Welcome to the AutoInterp Agent Framework!")
         print("="*60 + f"{color_end}")
-        user_input = input("\nEnter a topic you are interested in for LLM interpretability research (press Enter for suggestions from literature): ").strip()
+        context_pack_enabled = framework["config"].get("context_pack", {}).get("enabled", False)
+        if context_pack_enabled:
+            user_input = input("\nEnter a topic for LLM interpretability research (press Enter to generate one from the literature): ").strip()
+        else:
+            user_input = input("\nEnter a topic for LLM interpretability research (press Enter to generate one with LLM): ").strip()
 
         if not user_input:
-            # Pressed Enter: try topic mining suggestions first, then fall back to LLM-generated topic
-            suggestions = get_topic_suggestions_from_mining(max_suggestions=5)
-            if suggestions:
-                # Auto-select the topic most worth doing (highest importance score; tie-break by size for more literature)
-                best = max(suggestions, key=lambda s: (s["score"], s["size"]))
-                chosen = best["description"]
-                print("\n[AUTOINTERP] Suggested topics from interpretability literature (citation graph):")
-                for i, s in enumerate(suggestions, 1):
-                    mark = "  <-- selected" if s is best else ""
-                    print(f"  [{i}] {s['description']} (size={s['size']}, score={s['score']:.2f}){mark}")
-                print(f"[AUTOINTERP] Auto-selected topic (highest score, size={best['size']}): {chosen}")
-                framework["config"]["task"]["description"] = chosen
+            if context_pack_enabled:
+                # Context pack will sample papers and generate a grounded question in the pipeline
+                print("[AUTOINTERP] No topic provided. The context pack will generate a research question from the literature.")
+                framework["config"]["task"]["description"] = "LLM interpretability research"
             else:
-                print("[AUTOINTERP] No topic provided and no citation graph found. Generating a topic with LLM...")
+                print("[AUTOINTERP] No topic provided. Generating a topic with LLM...")
                 try:
                     generated_topic = await framework["question_manager"].generate_topic()
                     print(f"[AUTOINTERP] Generated topic: {generated_topic}")
@@ -2647,15 +2532,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
     command = getattr(args, "command", "run")
-    if command == "topic-mining":
-        try:
-            run_topic_mining_cmd(args)
-        except Exception as e:
-            import traceback
-            print(f"[AUTOINTERP] Topic mining failed: {e}")
-            traceback.print_exc()
-            sys.exit(1)
-        return
     if command == "context-pack":
         try:
             run_context_pack_cmd(args)

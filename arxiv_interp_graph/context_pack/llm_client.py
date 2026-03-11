@@ -1,7 +1,8 @@
 """
-Optional LLM client for topic package generation. Uses OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY from env.
+LLM client helpers for the context pack pipeline.
+Uses OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY from env.
 Returns a generate_fn(system_message, user_prompt, pdf_paths=None) -> response_text.
-When pdf_paths is provided and provider is OpenRouter, sends whole PDFs to the API (Sonnet 4 / multimodal).
+When pdf_paths is provided and provider is OpenRouter, sends whole PDFs to the API (multimodal).
 """
 
 import base64
@@ -52,7 +53,7 @@ def _make_openai_fn(model: str) -> Callable[..., str]:
             if r.choices and r.choices[0].message.content:
                 return r.choices[0].message.content
         except Exception as e:
-            print(f"[topic_package] OpenAI error: {e}")
+            print(f"[context_pack] OpenAI error: {e}")
         return ""
 
     return fn
@@ -76,7 +77,7 @@ def _make_anthropic_fn(model: str) -> Callable[..., str]:
             if r.content and r.content[0].type == "text":
                 return r.content[0].text
         except Exception as e:
-            print(f"[topic_package] Anthropic error: {e}")
+            print(f"[context_pack] Anthropic error: {e}")
         return ""
 
     return fn
@@ -91,7 +92,7 @@ def _make_openrouter_fn(model: str) -> Callable[..., str]:
     ) -> str:
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
-            print("[topic_package] OPENROUTER_API_KEY not set")
+            print("[context_pack] OPENROUTER_API_KEY not set")
             return ""
         pdf_paths = pdf_paths or []
         # Build user content: text + optional file parts (whole PDFs)
@@ -112,7 +113,7 @@ def _make_openrouter_fn(model: str) -> Callable[..., str]:
                     },
                 })
             except Exception as e:
-                print(f"[topic_package] OpenRouter: skip PDF {path}: {e}")
+                print(f"[context_pack] OpenRouter: skip PDF {path}: {e}")
         try:
             import requests
             url = "https://openrouter.ai/api/v1/chat/completions"
@@ -142,7 +143,7 @@ def _make_openrouter_fn(model: str) -> Callable[..., str]:
                 if content:
                     return content.strip()
         except Exception as e:
-            print(f"[topic_package] OpenRouter error: {e}")
+            print(f"[context_pack] OpenRouter error: {e}")
         return ""
 
     return fn

@@ -42,24 +42,24 @@ def _get_article_url(paper: Dict[str, Any], s2_client: Optional[Any] = None) -> 
     arxiv_id = paper.get("arxiv_id")
     if arxiv_id and isinstance(arxiv_id, str):
         url = _arxiv_pdf_url(arxiv_id)
-        logger.info("Using stored arxiv_id for '%s': %s", title, url)
+        logger.debug("Using stored arxiv_id for '%s': %s", title, url)
         return url
 
     # 2) Stored open_access_url (for Distill, Transformer Circuits, etc.)
     oa_url = paper.get("open_access_url")
     if oa_url and isinstance(oa_url, str):
-        logger.info("Using stored open_access_url for '%s': %s", title, oa_url)
+        logger.debug("Using stored open_access_url for '%s': %s", title, oa_url)
         return oa_url
 
     # 3) openAccessPdf already in paper dict (e.g., from a prior API enrichment)
     oa = paper.get("openAccessPdf") if isinstance(paper.get("openAccessPdf"), dict) else None
     if oa and oa.get("url"):
-        logger.info("Using openAccessPdf for '%s': %s", title, oa["url"])
+        logger.debug("Using openAccessPdf for '%s': %s", title, oa["url"])
         return oa["url"]
 
     # 4) Live S2 API call as last resort
     if s2_client and paper.get("paperId"):
-        logger.info("No stored URL for '%s'; fetching from S2 API...", title)
+        logger.debug("No stored URL for '%s'; fetching from S2 API...", title)
         try:
             fields = "paperId,title,year,openAccessPdf,externalIds"
             p = s2_client.get_paper(paper["paperId"], fields=fields)
@@ -69,12 +69,12 @@ def _get_article_url(paper: Dict[str, Any], s2_client: Optional[Any] = None) -> 
                 arxiv = ext.get("ArXiv") or ext.get("arXiv")
                 if arxiv and isinstance(arxiv, str):
                     url = _arxiv_pdf_url(arxiv)
-                    logger.info("S2 API returned arxiv_id for '%s': %s", title, url)
+                    logger.debug("S2 API returned arxiv_id for '%s': %s", title, url)
                     return url
                 # Fall back to openAccessPdf
                 oa = p.get("openAccessPdf") if isinstance(p.get("openAccessPdf"), dict) else None
                 if oa and oa.get("url"):
-                    logger.info("S2 API returned openAccessPdf for '%s': %s", title, oa["url"])
+                    logger.debug("S2 API returned openAccessPdf for '%s': %s", title, oa["url"])
                     return oa["url"]
                 logger.warning("S2 API returned no source for '%s'", title)
         except Exception as e:
@@ -158,23 +158,23 @@ def download_context_pack_pdfs(
         existing_pdf = base_path.with_suffix(".pdf")
         existing_html = base_path.with_suffix(".html")
         if existing_pdf.exists():
-            logger.info("Already downloaded '%s': %s", title, existing_pdf)
+            logger.debug("Already downloaded '%s': %s", title, existing_pdf)
             p["download_path"] = str(existing_pdf)
             p["pdf_path"] = str(existing_pdf)
             p["article_format"] = "pdf"
             continue
         if existing_html.exists():
-            logger.info("Already downloaded '%s': %s", title, existing_html)
+            logger.debug("Already downloaded '%s': %s", title, existing_html)
             p["download_path"] = str(existing_html)
             p["pdf_path"] = str(existing_html)
             p["article_format"] = "html"
             continue
 
-        logger.info("Downloading '%s' from %s", title, url)
+        logger.debug("Downloading '%s' from %s", title, url)
         saved_path, fmt = _download_article(url, base_path)
 
         if saved_path and saved_path.exists():
-            logger.info("Downloaded '%s' as %s: %s", title, fmt.upper(), saved_path)
+            logger.info("Downloaded: %s (%s)", title, fmt.upper())
             p["download_path"] = str(saved_path)
             p["pdf_path"] = str(saved_path)
             p["article_format"] = fmt
