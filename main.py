@@ -7,6 +7,7 @@ Implements a streamlined pipeline for automated interpretability research.
 import os
 import re
 import sys
+import time
 import argparse
 import asyncio
 import json
@@ -625,9 +626,14 @@ async def prioritize_questions(
                 logger.warning("Evaluator not available, skipping update of evaluation_results directory")
             logger.info(f"Updated question manager's storage directory")
             
+            # Update PipelineUI with new project directory (if stored in config)
+            _pipeline_ui = config.get("_pipeline_ui_ref")
+            if _pipeline_ui:
+                _pipeline_ui.update_project_dir(new_project_dir)
+
             logger.info(f"Successfully renamed project directory to '{new_project_id}'")
             print(f"[AUTOINTERP] Project directory renamed to: {new_project_id}")
-            
+
             # Console logging was already set up at the start of the pipeline
             # The rename operation moved the entire directory including console.log
             
@@ -1945,6 +1951,9 @@ async def generate_report(
     combined_evaluation_result["confidence_statement"] = confidence_statement
     
     # Generate visualizations for successful analyses
+    pipeline_ui = framework.get("pipeline_ui")
+    if pipeline_ui:
+        pipeline_ui.step_start("visualization")
     print(f"[AUTOINTERP] Generating visualizations for completed analyses...")
     logger.info("Starting visualization generation phase")
     
@@ -1954,7 +1963,10 @@ async def generate_report(
     
     # Generate visualizations using the full pipeline
     visualizations = await generate_visualizations(successful_analyses, framework)
-    
+    if pipeline_ui:
+        pipeline_ui.step_complete("visualization", summary=f"{len(visualizations)} visualizations")
+        pipeline_ui.step_start("report_generation")
+
     # Generate report (let the report generator handle title generation)
     try:
         task_description = config.get("task", {}).get("description", "")
@@ -1970,6 +1982,8 @@ async def generate_report(
 
         logger.info(f"Generated report at {report_path}")
         print(f"[AUTOINTERP] Generated comprehensive report at {report_path}")
+        if pipeline_ui:
+            pipeline_ui.step_complete("report_generation", summary=str(report_path))
 
         return {
             "report_path": report_path,
@@ -1979,6 +1993,8 @@ async def generate_report(
     except Exception as e:
         logger.error(f"Error generating report: {str(e)}")
         print(f"[AUTOINTERP] Error generating report: {str(e)}")
+        if pipeline_ui:
+            pipeline_ui.step_failed("report_generation", error=str(e))
 
         # Create a simple markdown report as fallback
         simple_report = f"# Interpretability Report: {task_name}\n\n"
@@ -2039,18 +2055,33 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
     task_description = config.get('task', {}).get('description', '')
     task_name = task_description[:50] + "..." if len(task_description) > 50 else task_description or 'Unnamed Task'
     logger.info(f"Starting streamlined pipeline for task: {task_name}")
-    print("\n" + "="*80)
-    print(f"[AUTOINTERP] Starting task execution - {get_timestamp()}")
-    print(f"[AUTOINTERP] Task: {task_name}")
-    print("="*80 + "\n")
+
+    # Get optional PipelineUI
+    pipeline_ui = framework.get("pipeline_ui")
+    # Store in config so prioritize_questions (which renames the project) can update it
+    if pipeline_ui:
+        config["_pipeline_ui_ref"] = pipeline_ui
+
+    if pipeline_ui:
+        pipeline_ui.pipeline_start(task_name)
+    else:
+        print("\n" + "="*80)
+        print(f"[AUTOINTERP] Starting task execution - {get_timestamp()}")
+        print(f"[AUTOINTERP] Task: {task_name}")
+        print("="*80 + "\n")
 
     use_context_pack_question = False
 
     try:
-        # Context pack (optional): seed + forward/backward -> 3 papers -> one question
+        # 1. Question Generation (via context pack or direct LLM)
+        if pipeline_ui:
+            pipeline_ui.step_start("question_generation")
+
         ctx_cfg = config.get("context_pack", {}) or {}
         if ctx_cfg.get("enabled", False):
             print("[AUTOINTERP] Context pack enabled: building 3-paper pack and generating question...")
+            _ctx_start = time.time() if pipeline_ui else None
+            _ctx_prompt_used = ""
             try:
                 arxiv_interp_root = PACKAGE_ROOT / "arxiv_interp_graph"
                 if str(arxiv_interp_root) not in sys.path:
@@ -2102,6 +2133,7 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                             prompt_template = config.get("prompts", {}).get("question_manager", {}).get("agent_question_generator", {}).get("prompt_template", "")
                             if not prompt_template:
                                 prompt_template = "There are scientific articles in the directory (dir). Read them and devise three research questions about LLM interpretability. Write them to Research_Questions.txt"
+                            _ctx_prompt_used = prompt_template.replace("(dir)", str((literature_dir / "pdfs").resolve()))
                             question_text = run_agent_question_generation(
                                 provider=provider,
                                 literature_dir=literature_dir,
@@ -2120,12 +2152,31 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                                     model=llm_config.get("model"),
                                 )
                             if llm_generate_fn:
+                                _ctx_prompt_used = _ctx_prompt_used or "(LLM API fallback with paper excerpts)"
                                 question_text = _generate_question_llm(papers, llm_generate_fn) or ""
 
                     if question_text:
                         (questions_dir / "questions.txt").write_text(question_text, encoding="utf-8")
                         use_context_pack_question = True
                         print(f"[AUTOINTERP] Context pack done: 3 papers, manifest + PDFs in literature/, question in questions/questions.txt")
+
+                        # Record the context pack interaction in the dashboard
+                        if pipeline_ui:
+                            _ctx_duration = time.time() - _ctx_start if _ctx_start else 0
+                            _ctx_model = f"{provider} CLI agent" if use_agent and provider in ("anthropic", "openai") else llm_config.get("model", "unknown")
+                            pipeline_ui.llm_call_complete(
+                                agent_name="context_pack_agent",
+                                display_name="Context Pack (Literature → Questions)",
+                                prompt=_ctx_prompt_used or "(agent prompt — see literature/pdfs/)",
+                                system_message=None,
+                                response=question_text,
+                                model=_ctx_model,
+                                provider=provider or "unknown",
+                                temperature=0,
+                                max_tokens=0,
+                                duration_seconds=_ctx_duration,
+                                step_id="question_generation",
+                            )
                     else:
                         print("[AUTOINTERP] Context pack produced no question; falling back to normal question generation.")
                 else:
@@ -2136,7 +2187,7 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                 traceback.print_exc()
                 print("[AUTOINTERP] Falling back to normal question generation.")
 
-        # 1. Question Generation (skipped if context pack produced questions)
+        # If context pack didn't produce a question, use standard LLM question generation
         if not use_context_pack_question:
             await generate_questions(
                 llm_interface=framework["llm_interface"],
@@ -2145,7 +2196,13 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                 logger=logger
             )
 
+        if pipeline_ui:
+            qg_summary = "from literature (context pack)" if use_context_pack_question else "LLM-generated"
+            pipeline_ui.step_complete("question_generation", summary=qg_summary)
+
         # 2. Question Prioritization (always runs)
+        if pipeline_ui:
+            pipeline_ui.step_start("question_prioritization")
         active_question = await prioritize_questions(
             question_manager=framework["question_manager"],
             llm_interface=framework["llm_interface"],
@@ -2153,8 +2210,14 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
             logger=logger,
             evaluator=framework["evaluator"]
         )
+        if pipeline_ui:
+            # Show first 80 chars of the selected question as summary
+            summary = active_question[:80] + "..." if len(active_question) > 80 else active_question
+            pipeline_ui.step_complete("question_prioritization", summary=summary)
 
         # 3. Iterative Analysis and Evaluation
+        if pipeline_ui:
+            pipeline_ui.step_start("iterative_analysis")
         all_analyses, all_evaluations = await iterative_analysis(
             active_question=active_question,
             analysis_generator=framework["analysis_generator"],
@@ -2167,7 +2230,13 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
             max_iterations=config.get("analysis", {}).get("max_iterations", 3),
             confidence_threshold=config.get("analysis", {}).get("confidence_threshold", 0.8)
         )
-        
+        if pipeline_ui:
+            final_conf = all_evaluations[-1].get("new_confidence", 0.0) if all_evaluations else 0.0
+            pipeline_ui.step_complete(
+                "iterative_analysis",
+                summary=f"{len(all_analyses)} analyses, confidence: {final_conf:.2f}"
+            )
+
         # 4. Report Generation
         # In the TXT-based approach, the active question is simply the prioritized_question.txt file
         logger.info("Loading prioritized question text file as active question")
@@ -2195,42 +2264,51 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         # Print task completion message
-        print("\n" + "="*80)
-        print(f"[AUTOINTERP] Task execution completed - {get_timestamp()}")
-        if "report_path" in report_result and report_result["report_path"]:
-            print(f"[AUTOINTERP] Report generated: {report_result['report_path']}")
-        print("="*80 + "\n")
-        
-        # Final logging
-        logger.info(f"Completed interpretability research pipeline. Final conclusion: Question is {report_result.get('conclusion', 'inconclusive').upper()} with {report_result.get('final_confidence', 0.5):.2f} confidence.")
-        
-        return {
+        result = {
             "status": "completed",
             "task_name": task_name,
             "report_path": report_result.get("report_path"),
             "conclusion": report_result.get("conclusion"),
             "final_confidence": report_result.get("final_confidence")
         }
+
+        if pipeline_ui:
+            pipeline_ui.pipeline_complete(result)
+        else:
+            print("\n" + "="*80)
+            print(f"[AUTOINTERP] Task execution completed - {get_timestamp()}")
+            if "report_path" in report_result and report_result["report_path"]:
+                print(f"[AUTOINTERP] Report generated: {report_result['report_path']}")
+            print("="*80 + "\n")
+
+        # Final logging
+        logger.info(f"Completed interpretability research pipeline. Final conclusion: Question is {report_result.get('conclusion', 'inconclusive').upper()} with {report_result.get('final_confidence', 0.5):.2f} confidence.")
+
+        return result
     
     except Exception as e:
         # Get full error message including traceback
         import traceback
         full_traceback = traceback.format_exc()
         error_message = str(e)
-        
+
         # Log detailed error information to logger
         logger.error(f"Error in streamlined pipeline: {str(e)}")
         logger.error(full_traceback)
-        
-        # Print full error message and traceback to console
-        print(f"\n[AUTOINTERP] ERROR: Task execution failed")
-        print(f"[AUTOINTERP] Error details: {error_message}")
-        print(f"[AUTOINTERP] Full traceback:\n{full_traceback}")
-        
+
+        # Notify PipelineUI
+        if pipeline_ui:
+            pipeline_ui.pipeline_failed(error_message)
+        else:
+            # Print full error message and traceback to console
+            print(f"\n[AUTOINTERP] ERROR: Task execution failed")
+            print(f"[AUTOINTERP] Error details: {error_message}")
+            print(f"[AUTOINTERP] Full traceback:\n{full_traceback}")
+
         # Log the pipeline failure
         logger.error(f"Pipeline execution failed: {error_message}")
         logger.error(f"Full traceback: {full_traceback}")
-        
+
         return {
             "status": "failed",
             "error": error_message,
@@ -2514,6 +2592,20 @@ async def async_main(args: argparse.Namespace) -> None:
             project_dir = projects_dir / project_id
             print(f"Using project directory at: {project_dir}")
         
+        # Initialize PipelineUI if rich terminal or HTML dashboard is enabled
+        try:
+            from AutoInterp.core.pipeline_ui import PipelineUI
+            pipeline_ui = PipelineUI(
+                project_dir=framework["path_resolver"].get_project_dir(),
+                config=framework["config"],
+            )
+            framework["pipeline_ui"] = pipeline_ui
+            framework["llm_interface"].pipeline_ui = pipeline_ui
+        except Exception as e:
+            # PipelineUI is non-critical — fall back to legacy output
+            print(f"[AUTOINTERP] Warning: PipelineUI init failed ({e}), using legacy output")
+            framework["pipeline_ui"] = None
+
         # Execute streamlined pipeline
         await streamlined_pipeline(framework)
     

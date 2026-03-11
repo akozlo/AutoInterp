@@ -153,7 +153,8 @@ class AnalysisPlanner:
         plan_response = await self.llm_interface.generate(
             prompt=user_prompt,
             system_message=system_prompt,
-            agent_name="analysis_planner"
+            agent_name="analysis_planner",
+            iteration_number=iteration_number
         )
         
         # Create the log path

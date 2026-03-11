@@ -144,6 +144,9 @@ class LLMInterface:
             raise ValueError(f"No timeout specified for agent '{agent_name}'")
         self.timeout = llm_config["timeout"]
 
+        # Pipeline UI (set externally when PipelineUI is active)
+        self.pipeline_ui = None
+
         # Access the central path resolver for consistent logging paths
         self.path_resolver = PathResolver(config)
 
@@ -258,9 +261,10 @@ User Prompt:
 """
         
         # VERBOSE LOGGING TO STDOUT WITH COLORS
-        agent_color = ColorCodes.get_agent_color(actual_agent_name, is_completion=False)
         agent_display_name = ColorCodes.get_agent_display_name(actual_agent_name)
-        
+        call_start_time = time.time()
+
+        agent_color = ColorCodes.get_agent_color(actual_agent_name, is_completion=False)
         print(ColorCodes.colorize("\n" + "="*80, actual_agent_name))
         print(ColorCodes.colorize(f"LLM CALL INITIATED - {agent_display_name}", actual_agent_name))
         print(ColorCodes.colorize("="*80, actual_agent_name))
@@ -285,7 +289,7 @@ User Prompt:
         print(ColorCodes.colorize("\n" + "-"*80, actual_agent_name))
         print(ColorCodes.colorize("CALLING LLM... Please wait...", actual_agent_name))
         print(ColorCodes.colorize("-"*80, actual_agent_name))
-        
+
         # Write to the file
         with open(log_file, "w") as f:
             f.write(log_content)
@@ -323,6 +327,8 @@ User Prompt:
             raise ValueError(f"Unsupported LLM provider: {provider}")
         
         # VERBOSE LOGGING OF RESPONSE TO STDOUT WITH DARKER COLORS
+        call_duration = time.time() - call_start_time
+
         print(ColorCodes.colorize("\n" + "="*80, actual_agent_name, is_completion=True))
         print(ColorCodes.colorize(f"LLM RESPONSE RECEIVED - {agent_display_name}", actual_agent_name, is_completion=True))
         print(ColorCodes.colorize("="*80, actual_agent_name, is_completion=True))
@@ -335,6 +341,22 @@ User Prompt:
         print(ColorCodes.colorize("\n" + "="*80, actual_agent_name, is_completion=True))
         print(ColorCodes.colorize("LLM CALL COMPLETE", actual_agent_name, is_completion=True))
         print(ColorCodes.colorize("="*80 + "\n", actual_agent_name, is_completion=True))
+
+        # Also record in pipeline UI for HTML dashboard
+        if self.pipeline_ui:
+            self.pipeline_ui.llm_call_complete(
+                agent_name=actual_agent_name,
+                display_name=agent_display_name,
+                prompt=prompt,
+                system_message=system_message,
+                response=response,
+                model=model,
+                provider=provider,
+                temperature=temp,
+                max_tokens=tokens,
+                duration_seconds=call_duration,
+                iteration_number=iteration_number,
+            )
         
         # Append LLM output to the log file
         response_content = f"""
@@ -814,6 +836,8 @@ Output:
 
         # Print agent information in the header
         display_name = ColorCodes.get_agent_display_name(actual_agent_name)
+        call_start_time = time.time()
+
         colored_name = ColorCodes.colorize(display_name, actual_agent_name, is_completion=False)
         iteration_info = f" (Iteration {iteration_number})" if iteration_number is not None else ""
         print(f"\n{colored_name}{iteration_info}:")
@@ -886,8 +910,32 @@ Image Count: {image_count}
             raise ValueError(f"Multimodal support not available for provider: {provider}")
 
         # Print colored completion indicator
+        call_duration = time.time() - call_start_time
+
         colored_completion = ColorCodes.colorize("✓ Complete", actual_agent_name, is_completion=True)
         print(f"{colored_completion}")
+
+        # Also record in pipeline UI for HTML dashboard
+        if self.pipeline_ui:
+            text_blocks = [block["text"] for block in message_content if block["type"] == "text"]
+            prompt_text = "\n".join(text_blocks)
+            image_count = len([block for block in message_content if block["type"] == "image"])
+            if image_count:
+                prompt_text += f"\n\n[{image_count} image(s) attached]"
+
+            self.pipeline_ui.llm_call_complete(
+                agent_name=actual_agent_name,
+                display_name=display_name,
+                prompt=prompt_text,
+                system_message=system_message,
+                response=response,
+                model=model,
+                provider=provider,
+                temperature=temp,
+                max_tokens=tokens,
+                duration_seconds=call_duration,
+                iteration_number=iteration_number,
+            )
 
         # Append response to log
         response_content = f"""

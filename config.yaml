@@ -108,6 +108,13 @@ output_directories:
 
 
 
+# UI settings
+ui:
+  rich_terminal: true        # Use Rich library for structured terminal output
+  html_dashboard: true       # Generate auto-refreshing HTML dashboard
+  dashboard_refresh: 5       # Dashboard auto-refresh interval in seconds
+  auto_open_browser: true    # Open dashboard in browser on pipeline start
+
 # Default LLM configuration
 llm:
   provider: "anthropic"
