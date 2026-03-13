@@ -29,7 +29,7 @@ context_pack:
   seed_id: null
   seed: null   # null = different papers each run; set e.g. 42 for reproducibility
   use_agent: true       # use CLI agent (claude/codex) for question generation; false = LLM API call
-  agent_timeout: 600    # seconds to wait for agent CLI subprocess
+  agent_timeout: 900    # seconds to wait for agent CLI subprocess
 
 # Model to analyze
 model:
@@ -102,8 +102,6 @@ paths:
 
 # Default output directories - all should use project-specific paths
 output_directories:
-  analysis_scripts: "projects/{project_id}/analysis_scripts"
-  analysis_results: "projects/{project_id}/analysis_results"
   visualizations: "projects/{project_id}/visualizations"
   reports: "projects/{project_id}/reports"
   evaluation_results: "projects/{project_id}/evaluation_results"

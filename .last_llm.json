@@ -1,4 +1,4 @@
 {
-"provider": "openrouter",
-"model": "anthropic/claude-sonnet-4.5"
+"provider": "anthropic",
+"model": "claude-opus-4-5-20251101"
 }

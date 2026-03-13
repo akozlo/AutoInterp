@@ -199,10 +199,14 @@ Key outputs:
 
 ### Analysis
 
+By default, analysis iterations are handled by a CLI agent subprocess (Claude CLI or Codex CLI) that autonomously plans, writes code, executes, debugs, and evaluates. When agent mode is unavailable, the system falls back to a legacy 4-module pipeline:
+
 - **Planner**: Creates detailed plans for analysis approaches based on questions and previous results
 - **Generator**: Creates Python code for analyses based on questions and plans
 - **Executor**: Safely runs analysis code in sandboxed environments and captures results
 - **Evaluator**: Assesses results and determines if they increase or decrease confidence that the research question has been adequately answered.
+
+Both modes write all output to the `analysis/` subdirectory within the project.
 
 ### Visualization
 

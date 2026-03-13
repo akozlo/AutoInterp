@@ -91,7 +91,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
         # Ensure all required directories exist
         self.path_resolver.ensure_path("visualizations")
         self.path_resolver.ensure_path("reports")
-        self.path_resolver.ensure_path("analysis_scripts")
+        self.path_resolver.ensure_path("analysis")
         self.path_resolver.ensure_path("evaluation_results")
         
         # Set up execution environment options
@@ -1335,7 +1335,7 @@ if __name__ == "__main__":
         script_dir = script_path_obj.parent
         
         # Use the same directory structure that was created by the AnalysisGenerator
-        # The script should be in a directory like analysis_scripts/analysis_1/attempt_1/
+        # The script should be in a directory like analysis/analysis_1/attempt_1/
         temp_dir = script_dir
         os.makedirs(temp_dir, exist_ok=True)
         

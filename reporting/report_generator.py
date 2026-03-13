@@ -463,7 +463,7 @@ class ReportGenerator:
             analysis_plan_text = latest_analysis["analysis_plan"]
         else:
             try:
-                plans_dir = self.path_resolver.get_path("analysis_plans")
+                plans_dir = self.path_resolver.get_path("analysis")
                 if plans_dir.exists():
                     plan_files = sorted(plans_dir.glob("analysis_plan_*.txt"), key=lambda x: x.name, reverse=True)
                     if plan_files:

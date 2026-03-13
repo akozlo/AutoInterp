@@ -10,10 +10,15 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
+from AutoInterp.core.agent_subprocess import (
+    MilestonePattern,
+    MilestoneSpec,
+    run_agent_with_polling,
+)
 from AutoInterp.core.utils import PathResolver, PACKAGE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -151,11 +156,13 @@ def run_analysis_agent(
     analysis_dir: Path,
     prompt_text: str,
     timeout: int = 1800,
+    on_progress: Optional[Callable[[str], None]] = None,
+    iteration_n: int = 1,
 ) -> Dict[str, Any]:
     """
     Launch the CLI agent subprocess and return the result.
 
-    Returns ``{"success": bool, "stdout": str, "stderr": str}``.
+    Returns ``{"success": bool, "stdout": str, "stderr": str, "returncode": int}``.
     """
     result = _get_analysis_agent_command(provider, prompt_text, analysis_dir)
     if result is None:
@@ -165,42 +172,62 @@ def run_analysis_agent(
             cli_name,
             provider,
         )
-        return {"success": False, "stdout": "", "stderr": f"CLI '{cli_name}' not found"}
+        return {"success": False, "stdout": "", "stderr": f"CLI '{cli_name}' not found", "returncode": -1}
 
     cmd, kwargs = result
+    cwd = Path(kwargs["cwd"])
     logger.debug("Running analysis agent: %s (timeout=%ds)", cmd[0], timeout)
     print(f"[AUTOINTERP] Running {cmd[0]} analysis agent (timeout={timeout}s)...")
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            **kwargs,
+    n = iteration_n
+    milestone = MilestoneSpec(
+        watch_dir=analysis_dir,
+        patterns=[
+            MilestonePattern(
+                glob=f"ANALYSIS_{n}_PLAN.md",
+                message_fn=lambda _: "Wrote analysis plan",
+            ),
+            MilestonePattern(
+                glob="*.py",
+                message_fn=lambda fname: f"Wrote script: {fname}",
+            ),
+            MilestonePattern(
+                glob="*.png",
+                message_fn=lambda fname: f"Generated figure: {fname}",
+            ),
+            MilestonePattern(
+                glob="*.jpg",
+                message_fn=lambda fname: f"Generated figure: {fname}",
+            ),
+            MilestonePattern(
+                glob="*.svg",
+                message_fn=lambda fname: f"Generated figure: {fname}",
+            ),
+            MilestonePattern(
+                glob=f"ANALYSIS_{n}_EVALUATION.md",
+                message_fn=lambda _: "Wrote evaluation",
+            ),
+        ],
+    )
+
+    proc_result = run_agent_with_polling(
+        cmd=cmd,
+        cwd=cwd,
+        timeout=timeout,
+        milestone=milestone,
+        on_progress=on_progress,
+    )
+
+    success = proc_result["success"]
+    if not success:
+        logger.warning(
+            "Analysis agent exited with code %d. stderr: %s",
+            proc_result["returncode"],
+            proc_result["stderr"][:500],
         )
-        success = proc.returncode == 0
-        if not success:
-            logger.warning(
-                "Analysis agent exited with code %d. stderr: %s",
-                proc.returncode,
-                proc.stderr[:500],
-            )
-            print(f"[AUTOINTERP] Analysis agent exited with code {proc.returncode}")
-        return {"success": success, "stdout": proc.stdout, "stderr": proc.stderr}
+        print(f"[AUTOINTERP] Analysis agent exited with code {proc_result['returncode']}")
 
-    except subprocess.TimeoutExpired:
-        logger.warning("Analysis agent timed out after %ds.", timeout)
-        print(f"[AUTOINTERP] Analysis agent timed out after {timeout}s.")
-        return {"success": False, "stdout": "", "stderr": f"Timed out after {timeout}s"}
-
-    except FileNotFoundError as exc:
-        logger.warning("Agent CLI not found: %s", exc)
-        return {"success": False, "stdout": "", "stderr": str(exc)}
-
-    except Exception as exc:
-        logger.warning("Agent subprocess failed: %s", exc)
-        return {"success": False, "stdout": "", "stderr": str(exc)}
+    return proc_result
 
 
 # ---------------------------------------------------------------------------

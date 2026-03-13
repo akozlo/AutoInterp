@@ -7,7 +7,13 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
+
+from AutoInterp.core.agent_subprocess import (
+    MilestonePattern,
+    MilestoneSpec,
+    run_agent_with_polling,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,7 @@ def run_agent_question_generation(
     literature_dir: str | Path,
     prompt_template: str,
     timeout: int = 600,
+    on_progress: Optional[Callable[[str], None]] = None,
 ) -> Optional[str]:
     """
     Invoke a CLI agent (claude or codex) to read PDFs and write Research_Questions.txt.
@@ -76,30 +83,35 @@ def run_agent_question_generation(
         return None
 
     cmd, kwargs = result
+    cwd = Path(kwargs["cwd"])
     logger.debug("Running agent question generation: %s (timeout=%ds)", cmd[0], timeout)
     print(f"[AUTOINTERP] Running {cmd[0]} agent to generate research questions (timeout={timeout}s)...")
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            **kwargs,
+    milestone = MilestoneSpec(
+        watch_dir=literature_dir,
+        patterns=[
+            MilestonePattern(
+                glob="Research_Questions.txt",
+                message_fn=lambda _: "Agent wrote Research_Questions.txt",
+            ),
+        ],
+    )
+
+    proc_result = run_agent_with_polling(
+        cmd=cmd,
+        cwd=cwd,
+        timeout=timeout,
+        milestone=milestone,
+        on_progress=on_progress,
+    )
+
+    if proc_result["returncode"] != 0:
+        logger.warning(
+            "Agent exited with code %d. stderr: %s",
+            proc_result["returncode"],
+            proc_result["stderr"][:500],
         )
-        if proc.returncode != 0:
-            logger.warning("Agent exited with code %d. stderr: %s", proc.returncode, proc.stderr[:500])
-            print(f"[AUTOINTERP] Agent exited with code {proc.returncode}")
-    except subprocess.TimeoutExpired:
-        logger.warning("Agent timed out after %ds.", timeout)
-        print(f"[AUTOINTERP] Agent timed out after {timeout}s.")
-        return None
-    except FileNotFoundError as e:
-        logger.warning("Agent CLI not found: %s", e)
-        return None
-    except Exception as e:
-        logger.warning("Agent subprocess failed: %s", e)
-        return None
+        print(f"[AUTOINTERP] Agent exited with code {proc_result['returncode']}")
 
     # Read Research_Questions.txt
     rq_path = literature_dir / "Research_Questions.txt"

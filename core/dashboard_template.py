@@ -151,6 +151,7 @@ _ANALYSIS_ROLE_MAP = {
     "analysis_planner": "PLANNER",
     "analysis_generator": "GENERATOR",
     "evaluator": "EVALUATOR",
+    "analysis_agent": "AGENT",
 }
 
 
@@ -264,6 +265,40 @@ def render_analysis_columns(interactions: List[Dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Progress log renderer
+# ---------------------------------------------------------------------------
+
+def render_progress_log(
+    progress_messages: List[Dict[str, Any]],
+    step_start_time: Optional[datetime] = None,
+) -> str:
+    """Render a progress log div from a list of progress message dicts."""
+    if not progress_messages:
+        return ""
+
+    entries = []
+    for pm in progress_messages:
+        ts = pm.get("timestamp")
+        msg = escape_html(pm.get("message", ""))
+        offset_str = ""
+        if step_start_time and ts:
+            delta = (ts - step_start_time).total_seconds()
+            offset_str = f"+{int(delta)}s"
+        entries.append(
+            f'<div class="progress-entry">'
+            f'<span class="progress-ts">{offset_str}</span>'
+            f'<span class="progress-msg">{msg}</span>'
+            f'</div>'
+        )
+
+    return (
+        '<div class="progress-log">'
+        + "\n".join(entries)
+        + '</div>'
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tab content renderer
 # ---------------------------------------------------------------------------
 
@@ -331,9 +366,13 @@ def render_tab_content(steps: List[Dict[str, Any]], task_name: str = "") -> str:
     # -- Per-step tabs --
     for step in steps:
         interactions = step.get("llm_interactions", [])
+        progress_msgs = step.get("progress_messages", [])
         step_id = step["step_id"]
         cfg = STEP_CONFIG.get(step_id, {"label": step_id, "tab_id": step_id})
         tab_id = cfg["tab_id"]
+
+        # Render progress log (shown above main content when present)
+        progress_html = render_progress_log(progress_msgs, step.get("start_time"))
 
         if step_id == "iterative_analysis":
             content = render_analysis_columns(interactions)
@@ -345,8 +384,14 @@ def render_tab_content(steps: List[Dict[str, Any]], task_name: str = "") -> str:
                 content = '<p class="no-data">pending</p>'
             elif status == "skipped":
                 content = f'<p class="no-data">skipped{" — " + escape_html(step.get("summary", "")) if step.get("summary") else ""}</p>'
+            elif progress_msgs:
+                # Running step with progress but no LLM interactions yet
+                content = ""
             else:
                 content = '<p class="no-data">No LLM interactions recorded for this step.</p>'
+
+        # Prepend progress log
+        content = progress_html + content
 
         parts.append(f'''
     <div class="tab-content" id="tab-{escape_html(tab_id)}">
@@ -528,6 +573,13 @@ td {{ padding: 6px 10px; border-bottom: 1px solid #1a1a1a; font-size: 13px; colo
 .role-section summary:hover {{ color: #ccc; }}
 
 .no-data {{ color: #555; padding: 20px 0; font-size: 13px; }}
+
+/* Progress log */
+.progress-log {{ margin-bottom: 16px; border: 1px solid #1a1a1a; padding: 8px 12px; background: #060606; }}
+.progress-entry {{ display: flex; gap: 12px; padding: 2px 0; font-size: 12px; line-height: 1.5; }}
+.progress-ts {{ color: #555; min-width: 50px; text-align: right; flex-shrink: 0; }}
+.progress-msg {{ color: #888; }}
+
 .footer {{ padding: 16px 20px; color: #555; font-size: 12px; border-top: 1px solid #1a1a1a; margin-top: 40px; }}
 </style>
 </head>

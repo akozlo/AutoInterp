@@ -966,25 +966,25 @@ class PathResolver:
         Get path for a specific component within the project directory.
         
         Args:
-            component_type: Type of component (e.g., 'analysis_scripts', 'visualizations')
+            component_type: Type of component (e.g., 'analysis', 'visualizations')
             subpath: Optional subdirectory or file within the component directory
-            
+
         Returns:
             Absolute path to the requested location
         """
         project_dir = self.get_project_dir()
         component_dir = project_dir / component_type
-        
+
         if subpath:
             return component_dir / subpath
         return component_dir
-    
+
     def ensure_path(self, component_type: str, subpath: str = "") -> Path:
         """
         Get path for a component and ensure the directory exists.
-        
+
         Args:
-            component_type: Type of component (e.g., 'analysis_scripts', 'visualizations')
+            component_type: Type of component (e.g., 'analysis', 'visualizations')
             subpath: Optional subdirectory or file within the component directory
             
         Returns:
@@ -1000,11 +1000,12 @@ class PathResolver:
     def get_analysis_plans_dir(self) -> Path:
         """
         Get the directory path for analysis plans.
-        
+        Legacy plans are now stored in the analysis/ directory.
+
         Returns:
-            Path to the analysis plans directory
+            Path to the analysis plans directory (analysis/)
         """
-        return self.ensure_path("analysis_plans")
+        return self.ensure_path("analysis")
         
     def get_prioritized_question_path(self) -> Path:
         """

@@ -324,8 +324,6 @@ async def initialize_framework(
     
     # Setup project directories using the path resolver
     path_resolver.ensure_path("")  # Create project root directory
-    path_resolver.ensure_path("analysis_scripts")
-    path_resolver.ensure_path("analysis_plans")
     path_resolver.ensure_path("reports")
     path_resolver.ensure_path("evaluation_results")
     path_resolver.ensure_path("questions")
@@ -1319,11 +1317,18 @@ async def iterative_analysis_agent(
         # Run agent
         import time as _time
         _agent_start = _time.time()
+        _analysis_progress_cb = None
+        if pipeline_ui:
+            _iter = iteration  # capture for closure
+            def _analysis_progress_cb(msg, _iter=_iter):
+                pipeline_ui.step_progress("iterative_analysis", f"[Iter {_iter}] {msg}")
         agent_result = run_analysis_agent(
             provider=provider,
             analysis_dir=iter_dir,
             prompt_text=prompt_text,
             timeout=agent_timeout,
+            on_progress=_analysis_progress_cb,
+            iteration_n=iteration,
         )
         _agent_duration = _time.time() - _agent_start
 
@@ -1478,7 +1483,7 @@ def find_successful_analyses(path_resolver: PathResolver) -> List[Tuple[str, str
     Find all successful analyses and extract their script and output files.
 
     Checks the agent layout (analysis/analysis_N/) first; falls back to the
-    legacy layout (analysis_scripts/analysis_N/attempt_N/) if the agent
+    legacy layout (analysis/analysis_N/attempt_N/) if the agent
     layout doesn't exist or is empty.
 
     Args:
@@ -1495,17 +1500,17 @@ def find_successful_analyses(path_resolver: PathResolver) -> List[Tuple[str, str
     if agent_results:
         return agent_results
 
-    # Legacy layout
+    # Legacy layout (scripts now also stored under analysis/)
     successful_analyses = []
-    analysis_scripts_dir = path_resolver.get_path("analysis_scripts")
+    analysis_dir = path_resolver.get_path("analysis")
 
-    if not analysis_scripts_dir.exists():
-        logger.warning(f"Analysis scripts directory not found: {analysis_scripts_dir}")
+    if not analysis_dir.exists():
+        logger.warning(f"Analysis directory not found: {analysis_dir}")
         return successful_analyses
 
     # Find all analysis_N directories
     analysis_dirs = []
-    for item in analysis_scripts_dir.iterdir():
+    for item in analysis_dir.iterdir():
         if item.is_dir() and item.name.startswith("analysis_"):
             try:
                 # Extract the analysis number
@@ -2392,11 +2397,16 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                             if not prompt_template:
                                 prompt_template = "There are scientific articles in the directory (dir). Read them and devise three research questions about LLM interpretability. Write them to Research_Questions.txt"
                             _ctx_prompt_used = prompt_template.replace("(dir)", str((literature_dir / "pdfs").resolve()))
+                            _qgen_progress_cb = None
+                            if pipeline_ui:
+                                def _qgen_progress_cb(msg):
+                                    pipeline_ui.step_progress("question_generation", msg)
                             question_text = run_agent_question_generation(
                                 provider=provider,
                                 literature_dir=literature_dir,
                                 prompt_template=prompt_template,
                                 timeout=agent_timeout,
+                                on_progress=_qgen_progress_cb,
                             ) or ""
 
                         # Fallback to LLM API call if agent didn't produce output

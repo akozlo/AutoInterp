@@ -72,6 +72,8 @@ Agent logic lives in `arxiv_interp_graph/context_pack/agent_questions.py`.
 
 When `analysis.use_agent: true` (default) and the provider is `anthropic` or `openai`, each analysis iteration is handled by a single CLI agent subprocess instead of the 4-module legacy pipeline. The agent autonomously plans, writes code, executes it, debugs failures, writes an evaluation, and updates a confidence tracker.
 
+Both agent and legacy pipelines write to the unified `analysis/` directory. The directory layouts are compatible but distinct:
+
 **Directory layout (agent mode):**
 ```
 analysis/
@@ -83,6 +85,22 @@ analysis/
     *.py                    # Analysis scripts (written + executed by agent)
     *.png                   # Generated figures
     ANALYSIS_1_EVALUATION.md
+  analysis_2/
+    ...
+```
+
+**Directory layout (legacy mode):**
+```
+analysis/
+  a1_analysis_plan_*.txt   # Plans from AnalysisPlanner
+  a2_analysis_plan_*.txt
+  analysis_1/
+    attempt_1/
+      analysis_*.py         # Generated script
+      analysis_generator_*.txt  # Prompt + response debug file
+      stdout.txt            # Execution output
+    attempt_2/
+      ...
   analysis_2/
     ...
 ```
@@ -155,12 +173,12 @@ literature/           # Context pack outputs (when enabled)
 questions/            # Question generation + prioritization
   questions.txt       # Generated or context-pack questions
   prioritized_question.txt  # Selected question (from prioritizer)
-analysis/             # Agent-mode analysis output (when use_agent=true)
-  background/         # Research question + confidence tracker
-  analysis_1/         # Per-iteration plans, scripts, evaluations
+analysis/             # All analysis output (agent and legacy)
+  background/         # Agent mode: research question + confidence tracker
+  analysis_1/         # Agent mode: plans, scripts, evaluations directly here
+                      # Legacy mode: attempt_1/, attempt_2/ subdirectories
   analysis_2/         # ...
-analysis_scripts/     # Legacy pipeline: generated Python analysis code
-analysis_results/     # Legacy pipeline: execution outputs
+  a1_analysis_plan_*.txt  # Legacy mode: planner output
 visualizations/       # Generated plots
 reports/              # Final report
 dashboard.html        # Auto-refreshing HTML dashboard (written during run)

@@ -53,11 +53,11 @@ class AnalysisGenerator:
         logger = logging.getLogger("autointerp.analysis_generator")
         logger.info(f"AnalysisGenerator initialized using path resolver with project_id: {self.path_resolver.project_id}")
         
-        # Ensure analysis_scripts directory exists
-        self.path_resolver.ensure_path("analysis_scripts")
-        
+        # Ensure analysis directory exists
+        self.path_resolver.ensure_path("analysis")
+
         # Log the path being used
-        logger.debug(f"Analysis scripts directory: {self.path_resolver.get_path('analysis_scripts')}")
+        logger.debug(f"Analysis directory: {self.path_resolver.get_path('analysis')}")
     
 # Template functionality removed completely
 
@@ -181,7 +181,7 @@ class AnalysisGenerator:
         # Use PathResolver to get absolute path and ensure directory exists
         try:
             # Create analysis directory if it doesn't exist
-            analysis_dir = self.path_resolver.ensure_path("analysis_scripts", analysis_dir_name)
+            analysis_dir = self.path_resolver.ensure_path("analysis", analysis_dir_name)
             
             # Create attempt directory within the analysis directory
             attempt_dir = ensure_directory(analysis_dir / attempt_dir_name)
@@ -217,7 +217,7 @@ class AnalysisGenerator:
             print(f"[AUTOINTERP] Full traceback:\n{full_traceback}")
             
             # Try a fallback location
-            fallback_dir = PACKAGE_ROOT / "analysis_scripts" / analysis_dir_name / attempt_dir_name
+            fallback_dir = PACKAGE_ROOT / "analysis" / analysis_dir_name / attempt_dir_name
             ensure_directory(fallback_dir)
             fallback_path = fallback_dir / filename
             print(f"[AUTOINTERP] Using fallback path: {fallback_path}")

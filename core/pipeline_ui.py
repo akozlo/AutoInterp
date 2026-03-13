@@ -18,6 +18,7 @@ from .dashboard_template import (
     DASHBOARD_TEMPLATE,
     render_tab_buttons,
     render_tab_content,
+    render_progress_log,
     STEP_CONFIG,
 )
 
@@ -35,6 +36,13 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
+
+@dataclass
+class ProgressMessage:
+    """A single progress update emitted during a pipeline step."""
+    message: str
+    timestamp: datetime
+
 
 @dataclass
 class LLMInteraction:
@@ -64,6 +72,7 @@ class PipelineStep:
     end_time: Optional[datetime] = None
     summary: Optional[str] = None
     llm_interactions: List[LLMInteraction] = field(default_factory=list)
+    progress_messages: List[ProgressMessage] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +333,25 @@ class PipelineUI:
             self._write_dashboard()
 
     # ------------------------------------------------------------------
+    # Progress tracking
+    # ------------------------------------------------------------------
+
+    def step_progress(self, step_id: str, message: str) -> None:
+        """Record a progress message for a running step."""
+        step = self.steps.get(step_id)
+        if not step:
+            return
+        step.progress_messages.append(ProgressMessage(message=message, timestamp=datetime.now()))
+
+        if self.rich_enabled:
+            self.console.print(f"  [dim]\\[~][/dim] {message}")
+        else:
+            print(f"  [~] {message}")
+
+        if self.dashboard_enabled:
+            self._write_dashboard()
+
+    # ------------------------------------------------------------------
     # LLM call tracking
     # ------------------------------------------------------------------
 
@@ -475,6 +503,10 @@ class PipelineUI:
                 "start_time": step.start_time,
                 "end_time": step.end_time,
                 "summary": step.summary,
+                "progress_messages": [
+                    {"message": pm.message, "timestamp": pm.timestamp}
+                    for pm in step.progress_messages
+                ],
                 "llm_interactions": [
                     {
                         "agent_name": i.agent_name,
