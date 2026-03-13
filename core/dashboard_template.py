@@ -45,6 +45,7 @@ STEP_CONFIG = {
     "iterative_analysis": {"label": "analysis", "tab_id": "analysis"},
     "visualization": {"label": "visualization", "tab_id": "visualization"},
     "report_generation": {"label": "report", "tab_id": "report"},
+    "autocritique": {"label": "critique", "tab_id": "critique"},
 }
 
 # Status → CSS class and icon for the merged tab/progress bar
@@ -435,6 +436,9 @@ a:hover {{ text-decoration: underline; }}
     --c-report: #f06292;
     --c-report-bright: #f48aaf;
     --c-report-dim: #c04070;
+    --c-critique: #ab47bc;
+    --c-critique-bright: #ce93d8;
+    --c-critique-dim: #7b1fa2;
     /* Analysis gradient: gold -> burnt orange -> burnt umber */
     --c-analysis-1: #ebc934;
     --c-analysis-1-bright: #f2d95c;
@@ -462,11 +466,13 @@ a:hover {{ text-decoration: underline; }}
 .tab-btn.step-done[data-tab="analysis"] {{ color: var(--c-analysis); }}
 .tab-btn.step-done[data-tab="visualization"] {{ color: var(--c-visualization); }}
 .tab-btn.step-done[data-tab="report"] {{ color: var(--c-report); }}
+.tab-btn.step-done[data-tab="critique"] {{ color: var(--c-critique); }}
 .tab-btn.step-run[data-tab="questions"] {{ color: var(--c-questions); }}
 .tab-btn.step-run[data-tab="prioritize"] {{ color: var(--c-prioritize); }}
 .tab-btn.step-run[data-tab="analysis"] {{ color: var(--c-analysis); }}
 .tab-btn.step-run[data-tab="visualization"] {{ color: var(--c-visualization); }}
 .tab-btn.step-run[data-tab="report"] {{ color: var(--c-report); }}
+.tab-btn.step-run[data-tab="critique"] {{ color: var(--c-critique); }}
 .tab-btn.step-pend {{ color: #555; }}
 /* Active tab: brightest + colored underline */
 .tab-btn.step-done[data-tab="questions"].active {{ color: var(--c-questions-bright); border-bottom-color: var(--c-questions); }}
@@ -477,8 +483,10 @@ a:hover {{ text-decoration: underline; }}
 .tab-btn.step-run[data-tab="prioritize"].active {{ color: var(--c-prioritize-bright); border-bottom-color: var(--c-prioritize); }}
 .tab-btn.step-run[data-tab="visualization"].active {{ color: var(--c-visualization-bright); border-bottom-color: var(--c-visualization); }}
 .tab-btn.step-run[data-tab="report"].active {{ color: var(--c-report-bright); border-bottom-color: var(--c-report); }}
+.tab-btn.step-run[data-tab="critique"].active {{ color: var(--c-critique-bright); border-bottom-color: var(--c-critique); }}
 .tab-btn.step-done[data-tab="visualization"].active {{ color: var(--c-visualization-bright); border-bottom-color: var(--c-visualization); }}
 .tab-btn.step-done[data-tab="report"].active {{ color: var(--c-report-bright); border-bottom-color: var(--c-report); }}
+.tab-btn.step-done[data-tab="critique"].active {{ color: var(--c-critique-bright); border-bottom-color: var(--c-critique); }}
 .tab-btn .status-icon {{ margin-right: 4px; }}
 .badge {{ color: #888; font-size: 12px; margin-left: 4px; }}
 
@@ -507,6 +515,7 @@ td {{ padding: 6px 10px; border-bottom: 1px solid #1a1a1a; font-size: 13px; colo
 .step-link-analysis {{ color: var(--c-analysis); }}
 .step-link-visualization {{ color: var(--c-visualization); }}
 .step-link-report {{ color: var(--c-report); }}
+.step-link-critique {{ color: var(--c-critique); }}
 .step-link-pend {{ color: #555; }}
 .step-link:hover {{ text-decoration: underline; }}
 
@@ -554,6 +563,12 @@ td {{ padding: 6px 10px; border-bottom: 1px solid #1a1a1a; font-size: 13px; colo
 #tab-report .card-head {{ border-left: 3px solid var(--c-report-dim); }}
 #tab-report .card-pre.user {{ color: var(--c-report-bright); }}
 #tab-report .card-pre.asst {{ color: var(--c-report-dim); }}
+
+#tab-critique h2 {{ color: var(--c-critique); }}
+#tab-critique .card-head .name {{ color: var(--c-critique-bright); }}
+#tab-critique .card-head {{ border-left: 3px solid var(--c-critique-dim); }}
+#tab-critique .card-pre.user {{ color: var(--c-critique-bright); }}
+#tab-critique .card-pre.asst {{ color: var(--c-critique-dim); }}
 
 /* Analysis columns */
 .analysis-row {{ display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }}

@@ -55,6 +55,12 @@ from AutoInterp.core.interactive import (
     make_revision_call,
     is_interactive,
 )
+from AutoInterp.autocritique.agent_autocritique import (
+    load_autocritique_prompt_template,
+    _build_autocritique_prompt,
+    run_autocritique_agent,
+    read_autocritique_outputs,
+)
 
 def select_provider_and_model() -> Tuple[str, str]:
     """
@@ -189,6 +195,7 @@ OPTIONS_SETTINGS = [
     {"key": "ui.html_dashboard",             "label": "HTML dashboard",                 "type": "bool",  "help": "Generate auto-refreshing HTML dashboard"},
     {"key": "ui.auto_open_browser",          "label": "Auto-open browser",              "type": "bool",  "help": "Open dashboard in browser on pipeline start"},
     {"key": "interactive_mode",              "label": "Interactive mode (feedback loops)", "type": "bool", "help": "Pause after each stage for user review and revision"},
+    {"key": "autocritique.enabled",          "label": "AutoCritique (peer review)",         "type": "bool", "help": "Run automated peer review after report generation"},
 ]
 
 
@@ -2998,11 +3005,87 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
             framework=framework
         )
 
+        # ------------------------------------------------------------------
+        # AutoCritique — optional automated peer review
+        # ------------------------------------------------------------------
+        import shutil as _shutil_ac
+        autocritique_cfg = config.get("autocritique", {})
+        _ac_enabled = autocritique_cfg.get("enabled", False)
+        _ac_use_agent = autocritique_cfg.get("use_agent", True)
+        _ac_provider = (config.get("llm", {}).get("provider") or "").lower()
+        _ac_review_path = None
+
+        if _ac_enabled and _ac_use_agent:
+            _ac_cli_name = "claude" if _ac_provider == "anthropic" else "codex"
+            _ac_agent_available = (
+                _ac_provider in ("anthropic", "openai")
+                and _shutil_ac.which(_ac_cli_name) is not None
+            )
+
+            if _ac_agent_available:
+                print("[AUTOINTERP] PHASE 5: AutoCritique (automated peer review)")
+                logger.info("Starting AutoCritique (provider=%s)", _ac_provider)
+                if pipeline_ui:
+                    pipeline_ui.step_start("autocritique")
+
+                try:
+                    _ac_prompt_template = load_autocritique_prompt_template()
+                    _ac_prompt_text = _build_autocritique_prompt(_ac_prompt_template)
+                    _ac_timeout = autocritique_cfg.get("agent_timeout", 600)
+
+                    _ac_progress_cb = None
+                    if pipeline_ui:
+                        def _ac_progress_cb(msg):
+                            pipeline_ui.step_progress("autocritique", msg)
+
+                    _ac_result = run_autocritique_agent(
+                        provider=_ac_provider,
+                        project_dir=path_resolver.get_project_dir(),
+                        prompt_text=_ac_prompt_text,
+                        timeout=_ac_timeout,
+                        on_progress=_ac_progress_cb,
+                    )
+
+                    _ac_outputs = read_autocritique_outputs(path_resolver.get_project_dir())
+                    _ac_review_path = _ac_outputs.get("review_path")
+
+                    if _ac_review_path:
+                        logger.info("AutoCritique review at %s", _ac_review_path)
+                        print(f"[AUTOINTERP] AutoCritique review at {_ac_review_path}")
+                        if pipeline_ui:
+                            pipeline_ui.step_complete("autocritique", summary=str(_ac_review_path))
+                    else:
+                        logger.warning("AutoCritique agent finished but no review file found")
+                        print("[AUTOINTERP] AutoCritique agent did not produce a review")
+                        if pipeline_ui:
+                            pipeline_ui.step_failed("autocritique", error="No review file produced")
+
+                except Exception as _ac_exc:
+                    logger.error("AutoCritique failed: %s", _ac_exc)
+                    print(f"[AUTOINTERP] AutoCritique failed: {_ac_exc}")
+                    if pipeline_ui:
+                        pipeline_ui.step_failed("autocritique", error=str(_ac_exc))
+            else:
+                if _ac_provider in ("anthropic", "openai"):
+                    print(f"[AUTOINTERP] AutoCritique: '{_ac_cli_name}' CLI not found; skipping")
+                else:
+                    print(f"[AUTOINTERP] AutoCritique: provider '{_ac_provider}' not supported; skipping")
+                if pipeline_ui:
+                    pipeline_ui.step_skipped("autocritique", reason=f"CLI not available for {_ac_provider}")
+        elif _ac_enabled and not _ac_use_agent:
+            print("[AUTOINTERP] AutoCritique: agent mode disabled; skipping")
+            if pipeline_ui:
+                pipeline_ui.step_skipped("autocritique", reason="agent mode disabled")
+        else:
+            if pipeline_ui:
+                pipeline_ui.step_skipped("autocritique", reason="disabled")
+
         # Print task completion message
         result = {
             "status": "completed",
             "task_name": task_name,
             "report_path": report_result.get("report_path"),
+            "autocritique_review_path": _ac_review_path,
             "conclusion": report_result.get("conclusion"),
             "final_confidence": report_result.get("final_confidence")
         }

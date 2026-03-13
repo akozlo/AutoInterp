@@ -91,6 +91,7 @@ AGENT_DISPLAY_NAMES = {
     "visualization_evaluator": "Visualization Evaluator",
     "reporter": "Reporter",
     "title_generator": "Title Generator",
+    "autocritique_agent": "AutoCritique Agent",
 }
 
 
@@ -114,6 +115,7 @@ AGENT_STEP_MAP = {
     "visualization_evaluator": "visualization",
     "reporter": "report_generation",
     "title_generator": "report_generation",
+    "autocritique_agent": "autocritique",
 }
 
 
@@ -133,6 +135,7 @@ PIPELINE_STEPS = [
     ("iterative_analysis", "Iterative Analysis"),
     ("visualization", "Visualization"),
     ("report_generation", "Report Generation"),
+    ("autocritique", "AutoCritique"),
 ]
 
 

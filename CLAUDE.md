@@ -139,6 +139,35 @@ reporting:
 
 Agent logic lives in `reporting/agent_report.py`. Prompt template in `prompts/agent_report.yaml`.
 
+### AutoCritique Agent Mode (`autocritique/agent_autocritique.py`)
+
+When `autocritique.enabled: true` (default) and `autocritique.use_agent: true`, an automated peer review step runs after report generation. A CLI agent subprocess (claude/codex) reads the report, analyses, and visualizations, then produces a formal review with a verdict (Reject / Revise and Resubmit / Accept).
+
+**No legacy fallback:** Unlike report generation, AutoCritique simply skips if the agent can't run. There is no non-agent path.
+
+**Skip rules:**
+- `autocritique.enabled: false` → step marked as skipped
+- `autocritique.use_agent: false` → step skipped
+- Provider not `anthropic`/`openai` → step skipped with message
+- CLI binary not found → step skipped with message
+
+Config fields:
+```yaml
+autocritique:
+  enabled: true         # default true; false = skip autocritique
+  use_agent: true       # must be true (no legacy fallback)
+  agent_timeout: 600    # subprocess timeout (seconds)
+```
+
+**Output directory:**
+```
+autocritique/
+  AutoCritique_log.md       # Agent working notes
+  AutoCritique_review.md    # Formal review (Summary, Strengths, Weaknesses, Minor Issues, Questions, Verdict, Confidence, Caveats)
+```
+
+Agent logic lives in `autocritique/agent_autocritique.py`. Prompt template in `prompts/agent_autocritique.yaml`. Toggleable via Options menu (#11).
+
 ### Pipeline UI (`core/pipeline_ui.py` + `core/dashboard_template.py`)
 
 The pipeline produces two forms of output:
@@ -148,7 +177,7 @@ The pipeline produces two forms of output:
 
 `PipelineUI` is created in `async_main()` and attached to `LLMInterface.pipeline_ui`. Every `generate()` call records an `LLMInteraction` and rewrites the dashboard. Step lifecycle calls (`step_start`, `step_complete`, etc.) are made from `streamlined_pipeline()`.
 
-The dashboard uses a dark "Civilization 2" theme with per-step color coding: green (questions), blue (prioritize), gold→burnt umber gradient (analysis), teal (visualization), coral (report). Tabs double as a progress bar. All prompt/response sections are collapsed by default. Auto-refresh uses `fetch()` + DOM diffing to preserve tab state, scroll position, and open/closed details.
+The dashboard uses a dark "Civilization 2" theme with per-step color coding: green (questions), blue (prioritize), gold→burnt umber gradient (analysis), teal (visualization), coral (report), purple (critique). Tabs double as a progress bar. All prompt/response sections are collapsed by default. Auto-refresh uses `fetch()` + DOM diffing to preserve tab state, scroll position, and open/closed details.
 
 Config (`config.yaml`):
 ```yaml
@@ -199,6 +228,7 @@ At startup, after provider/model selection, the user is prompted `Press [O] for 
 | 8 | HTML dashboard | `ui.html_dashboard` | bool |
 | 9 | Auto-open browser | `ui.auto_open_browser` | bool |
 | 10 | Interactive mode (feedback loops) | `interactive_mode` | bool |
+| 11 | AutoCritique (peer review) | `autocritique.enabled` | bool |
 
 After editing, the user chooses "Just this time" (in-memory only) or "Make default" (persisted to `.user_options.json`). Saved defaults are loaded automatically on future runs via `load_user_options()`, which runs right after `initialize_framework()`. Only keys present in `OPTIONS_SETTINGS` are applied; stale keys in the JSON file are ignored.
 
@@ -226,6 +256,8 @@ Key functions (all in `main.py`): `OPTIONS_SETTINGS`, `_get_config_value()`, `_s
 | `prompts/agent_analysis.yaml` | Prompt template for analysis agent iterations |
 | `reporting/agent_report.py` | CLI agent report generation: subprocess, output reading |
 | `prompts/agent_report.yaml` | Prompt template for report agent |
+| `autocritique/agent_autocritique.py` | CLI agent autocritique: subprocess, output reading |
+| `prompts/agent_autocritique.yaml` | Prompt template for autocritique agent |
 | `arxiv_interp_graph/enrich_arxiv_ids.py` | Batch-enrich graph with arxiv_id + open_access_url |
 | `.last_llm.json` | Persisted provider/model selection from last run |
 | `.user_options.json` | Persisted user option overrides (gitignored) |
@@ -251,6 +283,9 @@ analysis/             # All analysis output (agent and legacy)
   a1_analysis_plan_*.txt  # Legacy mode: planner output
 visualizations/       # Generated plots
 reports/              # Final report
+autocritique/         # AutoCritique outputs (when enabled)
+  AutoCritique_log.md       # Agent working notes
+  AutoCritique_review.md    # Formal review with verdict
 dashboard.html        # Auto-refreshing HTML dashboard (written during run)
 ```
 
