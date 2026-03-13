@@ -26,8 +26,9 @@ framework:
 task:
   description: ""  # Task description will be provided by user or auto-generated
 
-context_pack:
+literature_search:
   enabled: true
+  n_papers: 3   # number of papers to sample from graph for question generation
   graph: null   # null = use arxiv_interp_graph/output/graph_state.json
   seed_id: null
   seed: null   # null = different papers each run; set e.g. 42 for reproducibility
@@ -75,6 +76,8 @@ execution:
 
 # Visualization settings
 visualization:
+  use_agent: true             # Use CLI agent (claude/codex) for visualization; false = legacy pipeline
+  agent_timeout: 900          # Subprocess timeout in seconds for visualization agent
   default_format: "png"
   dpi: 300
   save_dir: "projects/{project_id}/visualizations"
@@ -95,6 +98,9 @@ autocritique:
   enabled: true               # Run automated peer review after report generation
   use_agent: true             # Use CLI agent (claude/codex) for autocritique
   agent_timeout: 600          # Subprocess timeout in seconds for autocritique agent
+  revision_timeout: 1800      # Per-recommendation timeout for revision agent (does analysis work)
+  report_revision_timeout: 900  # Timeout for report revision agent (incorporates revisions into report)
+  max_revision_rounds: 2      # Max autocritique→revision→report revision cycles (0 = no revisions)
 
 # Computational resources
 resources:

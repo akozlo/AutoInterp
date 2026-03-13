@@ -50,6 +50,12 @@ from AutoInterp.reporting.agent_report import (
     run_report_agent,
     read_report_outputs,
 )
+from AutoInterp.visualization.agent_visualization import (
+    load_visualization_prompt_template,
+    _build_visualization_prompt,
+    run_visualization_agent,
+    read_visualization_outputs,
+)
 from AutoInterp.core.interactive import (
     interactive_checkpoint,
     make_revision_call,
@@ -61,6 +67,60 @@ from AutoInterp.autocritique.agent_autocritique import (
     run_autocritique_agent,
     read_autocritique_outputs,
 )
+from AutoInterp.autocritique.agent_revision import (
+    load_revision_prompt_template,
+    _build_revision_prompt,
+    run_revision_agent,
+    read_revision_outputs,
+)
+from AutoInterp.reporting.agent_report_revision import (
+    load_report_revision_prompt_template,
+    _build_report_revision_prompt,
+    run_report_revision_agent,
+    read_report_revision_outputs,
+)
+
+
+# ---------------------------------------------------------------------------
+# Model catalogue — shared by provider selection and manual config menus
+# ---------------------------------------------------------------------------
+
+MODEL_MAPPINGS: Dict[str, Dict[str, str]] = {
+    "anthropic": {
+        "Claude Sonnet 4.6": "claude-sonnet-4-6",
+        "Claude Opus 4.6": "claude-opus-4-6",
+    },
+    "openai": {
+        "GPT-5.4": "gpt-5.4",
+        "GPT-5": "gpt-5-2025-08-07",
+        "GPT-5-mini": "gpt-5-mini-2025-08-07",
+    },
+    "openrouter": {
+        "Claude Sonnet 4.6": "anthropic/claude-sonnet-4.6",
+        "Claude Opus 4.6": "anthropic/claude-opus-4.6",
+        "GPT-5.4": "openai/gpt-5.4",
+        "GPT-5": "openai/gpt-5",
+        "GPT-5-mini": "openai/gpt-5-mini",
+        "Kimi K2": "moonshotai/kimi-k2-0905",
+        "Qwen3 235B-A22B": "qwen/qwen3-235b-a22b",
+        "DeepSeek V3.2": "deepseek/deepseek-v3.2",
+    },
+}
+
+# Agents with per-stage LLM config, in pipeline order
+MANUAL_CONFIG_AGENTS = [
+    ("question_generator",       "Question Generator"),
+    ("question_prioritizer",     "Question Prioritizer"),
+    ("analysis_planner",         "Analysis Planner"),
+    ("analysis_generator",       "Analysis Generator"),
+    ("evaluator",                "Analysis Evaluator"),
+    ("visualization_planner",    "Visualization Planner"),
+    ("visualization_generator",  "Visualization Generator"),
+    ("visualization_evaluator",  "Visualization Evaluator"),
+    ("reporter",                 "Report Generator"),
+    ("title_generator",          "Title Generator"),
+]
+
 
 def select_provider_and_model() -> Tuple[str, str]:
     """
@@ -69,41 +129,18 @@ def select_provider_and_model() -> Tuple[str, str]:
     Returns:
         Tuple of (provider, model_id)
     """
-    # Model mappings for each provider
-    model_mappings = {
-        "anthropic": {
-            "Claude Sonnet 4.6": "claude-sonnet-4-6",
-            "Claude Opus 4.6": "claude-opus-4-6",
-            "Claude Sonnet 4.5": "claude-sonnet-4-5",
-        },
-        "openai": {
-            "GPT-5.4": "gpt-5.4",
-            "GPT-5": "gpt-5-2025-08-07",
-            "GPT-5-mini": "gpt-5-mini-2025-08-07"
-        },
-        "openrouter": {
-            "Claude Sonnet 4.6": "anthropic/claude-sonnet-4.6",
-            "Claude Opus 4.6": "anthropic/claude-opus-4.6",
-            "GPT-5.4": "openai/gpt-5.4",
-            "Claude Sonnet 4.5": "anthropic/claude-sonnet-4.5",
-            "GPT-5": "openai/gpt-5",
-            "GPT-5-mini": "openai/gpt-5-mini",
-            "Kimi K2": "moonshotai/kimi-k2-0905",
-            "Qwen3 235B-A22B": "qwen/qwen3-235b-a22b",
-            "DeepSeek V3.2": "deepseek/deepseek-v3.2"
-        }
-    }
 
     print("\n" + "="*50)
     print("Select model provider:")
     print("="*50)
 
     # Provider options - show all options regardless of API keys
-    provider_options = ["anthropic", "openai", "openrouter", "manual"]
+    provider_options = ["anthropic", "openai", "openrouter", "manual", "options"]
     print("[1] Anthropic")
     print("[2] OpenAI")
     print("[3] OpenRouter")
-    print("[4] Manual Configuration (use config.yaml)")
+    print("[4] Manual Configuration")
+    print("[5] Options")
 
     # Get provider selection
     while True:
@@ -118,16 +155,19 @@ def select_provider_and_model() -> Tuple[str, str]:
         except (ValueError, KeyboardInterrupt):
             print(f"Please enter a valid number between 1 and {len(provider_options)}")
 
-    # If manual configuration, return None to skip overrides
+    # If manual configuration, return sentinel so caller can show per-stage menu
     if selected_provider == "manual":
-        print("Using manual configuration from config.yaml")
         return "manual", ""
+
+    # If options, return sentinel so caller can show menu and loop back
+    if selected_provider == "options":
+        return "options", ""
 
     print(f"\nSelected provider: {selected_provider.upper()}")
 
     # Model selection
     print(f"\nSelect default model:")
-    available_models = list(model_mappings[selected_provider].keys())
+    available_models = list(MODEL_MAPPINGS[selected_provider].keys())
 
     for i, model_name in enumerate(available_models, 1):
         print(f"[{i}] {model_name}")
@@ -139,7 +179,7 @@ def select_provider_and_model() -> Tuple[str, str]:
             model_idx = int(choice) - 1
             if 0 <= model_idx < len(available_models):
                 selected_model_name = available_models[model_idx]
-                selected_model_id = model_mappings[selected_provider][selected_model_name]
+                selected_model_id = MODEL_MAPPINGS[selected_provider][selected_model_name]
                 break
             else:
                 print(f"Please enter a number between 1 and {len(available_models)}")
@@ -189,13 +229,16 @@ OPTIONS_SETTINGS = [
     {"key": "analysis.confidence_threshold",  "label": "Confidence threshold",           "type": "float", "help": "Stop analysis above this confidence (0-100%)", "display_pct": True},
     {"key": "analysis.use_agent",            "label": "Use CLI agent for analysis",     "type": "bool",  "help": "true = CLI agent, false = legacy pipeline"},
     {"key": "reporting.use_agent",           "label": "Use CLI agent for report",       "type": "bool",  "help": "true = CLI agent, false = legacy pipeline"},
-    {"key": "context_pack.enabled",          "label": "Context pack (literature sampling)", "type": "bool", "help": "Sample papers and build literature context"},
+    {"key": "visualization.use_agent",      "label": "Use CLI agent for visualization","type": "bool",  "help": "true = CLI agent, false = legacy pipeline"},
+    {"key": "literature_search.enabled",          "label": "Literature search",                      "type": "bool", "help": "Sample papers and generate grounded questions"},
+    {"key": "literature_search.n_papers",         "label": "Articles for question gen",              "type": "int",  "help": "Number of papers sampled from graph"},
     {"key": "visualization.default_format",  "label": "Visualization format",           "type": "str",   "choices": ["png", "svg", "pdf"]},
     {"key": "visualization.dpi",             "label": "Visualization DPI",              "type": "int",   "help": "Dots per inch for raster output"},
     {"key": "ui.html_dashboard",             "label": "HTML dashboard",                 "type": "bool",  "help": "Generate auto-refreshing HTML dashboard"},
     {"key": "ui.auto_open_browser",          "label": "Auto-open browser",              "type": "bool",  "help": "Open dashboard in browser on pipeline start"},
     {"key": "interactive_mode",              "label": "Interactive mode (feedback loops)", "type": "bool", "help": "Pause after each stage for user review and revision"},
     {"key": "autocritique.enabled",          "label": "AutoCritique (peer review)",         "type": "bool", "help": "Run automated peer review after report generation"},
+    {"key": "autocritique.max_revision_rounds", "label": "Max revision rounds",              "type": "int",  "help": "Max autocritique→revision cycles (0 = review only, no revisions)"},
 ]
 
 
@@ -355,6 +398,137 @@ def show_options_menu(config: Dict[str, Any]) -> None:
         print("Options saved.")
     else:
         print("Options applied for this run.")
+
+
+# ---------------------------------------------------------------------------
+# Manual per-stage model configuration
+# ---------------------------------------------------------------------------
+
+def _build_model_list(config: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+    """Build a flat list of (provider, display_name, model_id) from MODEL_MAPPINGS.
+
+    Any (provider, model_id) pairs already present in the config agents but missing
+    from MODEL_MAPPINGS are appended so that custom models from config.yaml appear.
+    """
+    seen: set = set()
+    models: List[Tuple[str, str, str]] = []
+    for provider, mapping in MODEL_MAPPINGS.items():
+        for display_name, model_id in mapping.items():
+            models.append((provider, display_name, model_id))
+            seen.add((provider, model_id))
+
+    # Scan agents for custom models not in the catalogue
+    for agent_key, _label in MANUAL_CONFIG_AGENTS:
+        agent_cfg = config.get("agents", {}).get(agent_key, {}).get("llm", {})
+        prov = agent_cfg.get("provider", "")
+        mid = agent_cfg.get("model", "")
+        if prov and mid and (prov, mid) not in seen:
+            models.append((prov, mid, mid))  # display_name = model_id
+            seen.add((prov, mid))
+    return models
+
+
+def load_manual_model_config(config: Dict[str, Any]) -> None:
+    """Load .user_manual_models.json and apply saved per-agent overrides."""
+    path = Path(__file__).parent / ".user_manual_models.json"
+    if not path.exists():
+        return
+    try:
+        with open(path, "r") as f:
+            saved = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+    for key, value in saved.items():
+        _set_config_value(config, key, value)
+
+
+def save_manual_model_config(changed: Dict[str, Any]) -> None:
+    """Merge *changed* per-agent model settings into .user_manual_models.json."""
+    path = Path(__file__).parent / ".user_manual_models.json"
+    existing: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            with open(path, "r") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing.update(changed)
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2)
+
+
+def show_manual_config_menu(config: Dict[str, Any]) -> None:
+    """Interactive per-stage model configuration. Modifies *config* in-place."""
+    all_models = _build_model_list(config)
+    changed: Dict[str, Any] = {}
+
+    while True:
+        print("\n" + "=" * 60)
+        print("Per-Stage Model Configuration")
+        print("=" * 60)
+        for i, (agent_key, label) in enumerate(MANUAL_CONFIG_AGENTS, 1):
+            agent_cfg = config.get("agents", {}).get(agent_key, {}).get("llm", {})
+            provider = agent_cfg.get("provider", "?")
+            model = agent_cfg.get("model", "?")
+            dots = "." * (35 - len(label))
+            print(f"[{i:>2}] {label} {dots} {provider} / {model}")
+
+        print("\n(Custom models can be added to config.yaml under agents.<name>.llm)")
+        choice = input("\nEnter number to edit, or press Enter to finish: ").strip()
+        if not choice:
+            break
+        try:
+            idx = int(choice) - 1
+            if not (0 <= idx < len(MANUAL_CONFIG_AGENTS)):
+                print("Invalid number.")
+                continue
+        except ValueError:
+            print("Invalid input.")
+            continue
+
+        agent_key, label = MANUAL_CONFIG_AGENTS[idx]
+
+        print(f"\nSelect model for {label}:")
+        for j, (provider, display_name, model_id) in enumerate(all_models, 1):
+            print(f"[{j:>2}] {provider.capitalize()} / {display_name}")
+
+        model_choice = input(f"\nSelect model [1-{len(all_models)}]: ").strip()
+        if not model_choice:
+            continue
+        try:
+            model_idx = int(model_choice) - 1
+            if not (0 <= model_idx < len(all_models)):
+                print(f"Please enter a number between 1 and {len(all_models)}")
+                continue
+        except ValueError:
+            print("Invalid input.")
+            continue
+
+        provider, display_name, model_id = all_models[model_idx]
+        config["agents"][agent_key]["llm"]["provider"] = provider
+        config["agents"][agent_key]["llm"]["model"] = model_id
+        changed[f"agents.{agent_key}.llm.provider"] = provider
+        changed[f"agents.{agent_key}.llm.model"] = model_id
+        print(f"  -> {label}: {provider} / {display_name}")
+
+    # Also sync config["llm"] to the question_generator so LLMInterface defaults match
+    qg = config.get("agents", {}).get("question_generator", {}).get("llm", {})
+    if qg:
+        config.setdefault("llm", {})["provider"] = qg.get("provider")
+        config.setdefault("llm", {})["model"] = qg.get("model")
+
+    if not changed:
+        return
+
+    print("\nSave changes:")
+    print("[1] Just this time")
+    print("[2] Make default (save to .user_manual_models.json)")
+    save_choice = input("Choice [1]: ").strip()
+    if save_choice == "2":
+        save_manual_model_config(changed)
+        print("Manual model configuration saved.")
+    else:
+        print("Configuration applied for this run.")
 
 
 async def initialize_framework(
@@ -2519,12 +2693,68 @@ async def generate_report(
     print(f"[AUTOINTERP] Generating visualizations for completed analyses...")
     logger.info("Starting visualization generation phase")
     
-    # Find successful analyses and extract their files
     path_resolver = framework["path_resolver"]
-    successful_analyses = find_successful_analyses(path_resolver)
-    
-    # Generate visualizations using the full pipeline
-    visualizations = await generate_visualizations(successful_analyses, framework)
+
+    # ------------------------------------------------------------------
+    # Decide whether to use agent or legacy visualization pipeline
+    # ------------------------------------------------------------------
+    import shutil as _shutil_viz
+    viz_cfg = config.get("visualization", {})
+    _viz_use_agent = viz_cfg.get("use_agent", True)
+    _provider = (config.get("llm", {}).get("provider") or "").lower()
+    _viz_agent_available = (
+        _viz_use_agent
+        and _provider in ("anthropic", "openai")
+        and _shutil_viz.which("claude" if _provider == "anthropic" else "codex") is not None
+    )
+
+    visualizations: Dict[str, str] = {}
+
+    if _viz_agent_available:
+        # --- Agent-based visualization ---
+        print("[AUTOINTERP] Using CLI agent for visualization generation")
+        logger.info("Using CLI agent for visualization (provider=%s)", _provider)
+
+        try:
+            _viz_prompt_template = load_visualization_prompt_template()
+        except FileNotFoundError as exc:
+            logger.error("Could not load visualization prompt template: %s", exc)
+            print(f"[AUTOINTERP] ERROR: {exc}; falling back to legacy visualization pipeline")
+            _viz_agent_available = False  # fall through to legacy below
+
+        if _viz_agent_available:
+            analysis_root = path_resolver.get_path("analysis")
+            _viz_prompt_text = _build_visualization_prompt(_viz_prompt_template, analysis_root)
+            _viz_agent_timeout = viz_cfg.get("agent_timeout", 900)
+            viz_dir = path_resolver.ensure_path("visualizations")
+
+            _viz_progress_cb = None
+            if pipeline_ui:
+                def _viz_progress_cb(msg):
+                    pipeline_ui.step_progress("visualization", msg)
+
+            _viz_agent_result = run_visualization_agent(
+                provider=_provider,
+                viz_dir=viz_dir,
+                prompt_text=_viz_prompt_text,
+                timeout=_viz_agent_timeout,
+                on_progress=_viz_progress_cb,
+            )
+
+            visualizations = read_visualization_outputs(viz_dir)
+
+            if visualizations:
+                logger.info("Visualization agent produced %d figures", len(visualizations))
+                print(f"[AUTOINTERP] Visualization agent produced {len(visualizations)} figures")
+            else:
+                logger.warning("Visualization agent produced no figures; falling back to legacy pipeline")
+                print("[AUTOINTERP] Visualization agent produced no figures — falling back to legacy pipeline")
+                _viz_agent_available = False  # fall through to legacy below
+
+    if not _viz_agent_available:
+        # --- Legacy visualization pipeline ---
+        successful_analyses = find_successful_analyses(path_resolver)
+        visualizations = await generate_visualizations(successful_analyses, framework)
 
     # Interactive feedback on visualizations
     _viz_feedback = ""
@@ -2758,16 +2988,16 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[AUTOINTERP] Task: {task_name}")
         print("="*80 + "\n")
 
-    use_context_pack_question = False
+    use_literature_search_question = False
 
     try:
-        # 1. Question Generation (via context pack or direct LLM)
+        # 1. Question Generation (via literature search or direct LLM)
         if pipeline_ui:
             pipeline_ui.step_start("question_generation")
 
-        ctx_cfg = config.get("context_pack", {}) or {}
+        ctx_cfg = config.get("literature_search", {}) or {}
         if ctx_cfg.get("enabled", False):
-            print("[AUTOINTERP] Context pack enabled: building 3-paper pack and generating question...")
+            print("[AUTOINTERP] Literature search enabled: building 3-paper pack and generating question...")
             _ctx_start = time.time() if pipeline_ui else None
             _ctx_prompt_used = ""
             try:
@@ -2781,29 +3011,31 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                 questions_dir = path_resolver.ensure_path("questions")
                 literature_dir = path_resolver.ensure_path("literature")
                 if graph_path.exists():
-                    from context_pack.sampling import build_context_pack
-                    from context_pack.download import download_context_pack_pdfs, write_manifest
-                    from context_pack.agent_questions import run_agent_question_generation
-                    from context_pack.run import _generate_question_llm
+                    from literature_search.sampling import build_literature_search
+                    from literature_search.download import download_literature_search_pdfs, write_manifest
+                    from literature_search.agent_questions import run_agent_question_generation
+                    from literature_search.run import _generate_question_llm
                     from api_client import SemanticScholarClient
-                    from context_pack.llm_client import get_llm_generate_fn
-                    from context_pack.run import _load_graph
+                    from literature_search.llm_client import get_llm_generate_fn
+                    from literature_search.run import _load_graph
 
                     s2_client = SemanticScholarClient()
 
-                    # Load graph and sample 3 papers
+                    # Load graph and sample papers
+                    n_papers = ctx_cfg.get("n_papers", 3)
                     G = _load_graph(graph_path)
-                    papers = build_context_pack(
+                    papers = build_literature_search(
                         G,
                         seed_id=ctx_cfg.get("seed_id"),
                         s2_client=s2_client,
                         seed=ctx_cfg.get("seed"),
+                        n_papers=n_papers,
                     )
 
                     question_text = ""
-                    if len(papers) >= 3:
+                    if len(papers) >= n_papers:
                         # Download PDFs to literature/pdfs/
-                        papers = download_context_pack_pdfs(papers, literature_dir, s2_client)
+                        papers = download_literature_search_pdfs(papers, literature_dir, s2_client)
                         write_manifest(papers, literature_dir)
 
                         # Determine provider
@@ -2850,10 +3082,10 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
 
                     if question_text:
                         (questions_dir / "questions.txt").write_text(question_text, encoding="utf-8")
-                        use_context_pack_question = True
-                        print(f"[AUTOINTERP] Context pack done: 3 papers, manifest + PDFs in literature/, question in questions/questions.txt")
+                        use_literature_search_question = True
+                        print(f"[AUTOINTERP] Literature search done: 3 papers, manifest + PDFs in literature/, question in questions/questions.txt")
 
-                        # Interactive checkpoint: let user revise context-pack questions
+                        # Interactive checkpoint: let user revise literature-search questions
                         if is_interactive(config):
                             try:
                                 _cp_llm = framework["llm_interface"]
@@ -2870,18 +3102,18 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                                     _cp_questions_file.write_text(text, encoding="utf-8")
 
                                 question_text = await interactive_checkpoint(
-                                    "Context Pack Questions", question_text, _revise_cp_questions, _save_cp_questions, config
+                                    "Literature Search Questions", question_text, _revise_cp_questions, _save_cp_questions, config
                                 )
                             except Exception as e:
-                                logger.warning(f"Interactive checkpoint failed for context pack questions: {e}")
+                                logger.warning(f"Interactive checkpoint failed for literature search questions: {e}")
 
-                        # Record the context pack interaction in the dashboard
+                        # Record the literature search interaction in the dashboard
                         if pipeline_ui:
                             _ctx_duration = time.time() - _ctx_start if _ctx_start else 0
                             _ctx_model = f"{provider} CLI agent" if use_agent and provider in ("anthropic", "openai") else llm_config.get("model", "unknown")
                             pipeline_ui.llm_call_complete(
-                                agent_name="context_pack_agent",
-                                display_name="Context Pack (Literature → Questions)",
+                                agent_name="literature_search_agent",
+                                display_name="Literature Search (Literature → Questions)",
                                 prompt=_ctx_prompt_used or "(agent prompt — see literature/pdfs/)",
                                 system_message=None,
                                 response=question_text,
@@ -2893,17 +3125,17 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                                 step_id="question_generation",
                             )
                     else:
-                        print("[AUTOINTERP] Context pack produced no question; falling back to normal question generation.")
+                        print("[AUTOINTERP] Literature search produced no question; falling back to normal question generation.")
                 else:
-                    print(f"[AUTOINTERP] Context pack skipped: graph not found at {graph_path}")
+                    print(f"[AUTOINTERP] Literature search skipped: graph not found at {graph_path}")
             except Exception as e:
-                logger.warning(f"Context pack failed: {e}")
+                logger.warning(f"Literature search failed: {e}")
                 import traceback
                 traceback.print_exc()
                 print("[AUTOINTERP] Falling back to normal question generation.")
 
-        # If context pack didn't produce a question, use standard LLM question generation
-        if not use_context_pack_question:
+        # If literature search didn't produce a question, use standard LLM question generation
+        if not use_literature_search_question:
             await generate_questions(
                 llm_interface=framework["llm_interface"],
                 question_manager=framework["question_manager"],
@@ -2912,7 +3144,7 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         if pipeline_ui:
-            qg_summary = "from literature (context pack)" if use_context_pack_question else "LLM-generated"
+            qg_summary = "from literature (literature search)" if use_literature_search_question else "LLM-generated"
             pipeline_ui.step_complete("question_generation", summary=qg_summary)
 
         # 2. Question Prioritization (always runs)
@@ -3006,14 +3238,21 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         # ------------------------------------------------------------------
-        # AutoCritique — optional automated peer review
+        # AutoCritique → Revision → Report Revision loop
         # ------------------------------------------------------------------
         import shutil as _shutil_ac
         autocritique_cfg = config.get("autocritique", {})
         _ac_enabled = autocritique_cfg.get("enabled", False)
         _ac_use_agent = autocritique_cfg.get("use_agent", True)
         _ac_provider = (config.get("llm", {}).get("provider") or "").lower()
+        _ac_max_rounds = autocritique_cfg.get("max_revision_rounds", 2)
+
+        # Track state across rounds
         _ac_review_path = None
+        _revised_report_path = None
+        _all_rev_responses = []       # responses across all rounds
+        _revised_report_filename = None  # basename of the most recent revised report
+        _ac_final_round = 0           # last round that completed
 
         if _ac_enabled and _ac_use_agent:
             _ac_cli_name = "claude" if _ac_provider == "anthropic" else "codex"
@@ -3023,48 +3262,244 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
             )
 
             if _ac_agent_available:
-                print("[AUTOINTERP] PHASE 5: AutoCritique (automated peer review)")
-                logger.info("Starting AutoCritique (provider=%s)", _ac_provider)
                 if pipeline_ui:
                     pipeline_ui.step_start("autocritique")
 
-                try:
-                    _ac_prompt_template = load_autocritique_prompt_template()
-                    _ac_prompt_text = _build_autocritique_prompt(_ac_prompt_template)
-                    _ac_timeout = autocritique_cfg.get("agent_timeout", 600)
+                # The loop runs at most _ac_max_rounds + 1 autocritique reviews:
+                # round 1 review, then up to _ac_max_rounds of (revision + report revision + re-review).
+                # If a review returns Accept or Reject, we stop immediately.
+                _ac_round = 0
+                _keep_reviewing = True
 
-                    _ac_progress_cb = None
+                while _keep_reviewing:
+                    _ac_round += 1
+                    _ac_final_round = _ac_round
+                    _keep_reviewing = False  # will be set True only on Revise and Resubmit + rounds remaining
+
+                    # ==============================================================
+                    # AutoCritique review
+                    # ==============================================================
+                    print(f"[AUTOINTERP] PHASE 5: AutoCritique round {_ac_round} (automated peer review)")
+                    logger.info("Starting AutoCritique round %d (provider=%s)", _ac_round, _ac_provider)
                     if pipeline_ui:
-                        def _ac_progress_cb(msg):
-                            pipeline_ui.step_progress("autocritique", msg)
+                        pipeline_ui.step_progress("autocritique", f"Starting round {_ac_round}")
 
-                    _ac_result = run_autocritique_agent(
-                        provider=_ac_provider,
-                        project_dir=path_resolver.get_project_dir(),
-                        prompt_text=_ac_prompt_text,
-                        timeout=_ac_timeout,
-                        on_progress=_ac_progress_cb,
-                    )
+                    _ac_review_path = None
+                    _ac_outputs = None
 
-                    _ac_outputs = read_autocritique_outputs(path_resolver.get_project_dir())
-                    _ac_review_path = _ac_outputs.get("review_path")
+                    try:
+                        _ac_prompt_template = load_autocritique_prompt_template()
+                        _ac_prompt_text = _build_autocritique_prompt(
+                            _ac_prompt_template,
+                            round_number=_ac_round,
+                            revised_report_filename=_revised_report_filename,
+                        )
+                        _ac_timeout = autocritique_cfg.get("agent_timeout", 600)
 
-                    if _ac_review_path:
-                        logger.info("AutoCritique review at %s", _ac_review_path)
-                        print(f"[AUTOINTERP] AutoCritique review at {_ac_review_path}")
+                        _ac_progress_cb = None
                         if pipeline_ui:
-                            pipeline_ui.step_complete("autocritique", summary=str(_ac_review_path))
-                    else:
-                        logger.warning("AutoCritique agent finished but no review file found")
-                        print("[AUTOINTERP] AutoCritique agent did not produce a review")
-                        if pipeline_ui:
-                            pipeline_ui.step_failed("autocritique", error="No review file produced")
+                            def _ac_progress_cb(msg, _rnd=_ac_round):
+                                pipeline_ui.step_progress("autocritique", f"[round {_rnd}] {msg}")
 
-                except Exception as _ac_exc:
-                    logger.error("AutoCritique failed: %s", _ac_exc)
-                    print(f"[AUTOINTERP] AutoCritique failed: {_ac_exc}")
+                        _ac_result = run_autocritique_agent(
+                            provider=_ac_provider,
+                            project_dir=path_resolver.get_project_dir(),
+                            prompt_text=_ac_prompt_text,
+                            timeout=_ac_timeout,
+                            round_number=_ac_round,
+                            on_progress=_ac_progress_cb,
+                        )
+
+                        _ac_outputs = read_autocritique_outputs(path_resolver.get_project_dir(), round_number=_ac_round)
+                        _ac_review_path = _ac_outputs.get("review_path")
+
+                        if _ac_review_path:
+                            logger.info("AutoCritique round %d review at %s", _ac_round, _ac_review_path)
+                            print(f"[AUTOINTERP] AutoCritique round {_ac_round} review at {_ac_review_path}")
+                        else:
+                            logger.warning("AutoCritique agent (round %d) finished but no review file found", _ac_round)
+                            print(f"[AUTOINTERP] AutoCritique agent (round {_ac_round}) did not produce a review")
+                            break  # can't continue without a review
+
+                    except Exception as _ac_exc:
+                        logger.error("AutoCritique (round %d) failed: %s", _ac_round, _ac_exc)
+                        print(f"[AUTOINTERP] AutoCritique (round {_ac_round}) failed: {_ac_exc}")
+                        break
+
+                    # ----------------------------------------------------------
+                    # Check verdict
+                    # ----------------------------------------------------------
+                    try:
+                        _review_text = Path(_ac_review_path).read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        _review_text = ""
+
+                    _is_revise = "**Revise and Resubmit**" in _review_text
+                    _has_recs = bool(_ac_outputs and _ac_outputs.get("recommendations"))
+                    _rounds_remaining = _ac_round < _ac_max_rounds + 1  # round 1 is the initial review; revisions use rounds 1.._ac_max_rounds
+
+                    if not (_is_revise and _has_recs and _rounds_remaining):
+                        # Terminal verdict or max rounds reached
+                        if _is_revise and not _rounds_remaining:
+                            print(f"[AUTOINTERP] AutoCritique round {_ac_round}: Revise and Resubmit, but max revision rounds ({_ac_max_rounds}) reached")
+                            logger.info("Max revision rounds reached (%d); stopping", _ac_max_rounds)
+                        elif _is_revise and not _has_recs:
+                            print(f"[AUTOINTERP] AutoCritique round {_ac_round}: Revise and Resubmit but no recommendations; stopping")
+                        else:
+                            _verdict_label = "Accept" if "**Accept**" in _review_text else ("Reject" if "**Reject**" in _review_text else "Unknown")
+                            print(f"[AUTOINTERP] AutoCritique round {_ac_round} verdict: {_verdict_label}")
+                            logger.info("AutoCritique round %d verdict: %s", _ac_round, _verdict_label)
+                        break
+
+                    # ==============================================================
+                    # Revision — address recommendations
+                    # ==============================================================
+                    _rec_paths = _ac_outputs["recommendations"]
+                    print(f"[AUTOINTERP] PHASE 6: Revision — addressing {len(_rec_paths)} recommendation(s) from round {_ac_round}")
+                    logger.info("Starting revision phase: %d recommendations from round %d", len(_rec_paths), _ac_round)
                     if pipeline_ui:
-                        pipeline_ui.step_failed("autocritique", error=str(_ac_exc))
+                        pipeline_ui.step_progress("revision", f"Starting round {_ac_round}: {len(_rec_paths)} recommendation(s)")
+                        if _ac_round == 1:
+                            pipeline_ui.step_start("revision")
+
+                    _round_rev_ok = True
+                    try:
+                        _rev_template = load_revision_prompt_template()
+                        _rev_timeout = autocritique_cfg.get("revision_timeout", 1800)
+
+                        for _rec_idx, _rec_path in enumerate(_rec_paths, start=1):
+                            print(f"[AUTOINTERP]   Recommendation {_rec_idx}/{len(_rec_paths)}: {Path(_rec_path).name}")
+                            logger.info("Revision agent: round %d, recommendation %d", _ac_round, _rec_idx)
+
+                            _rev_prompt_text = _build_revision_prompt(
+                                _rev_template,
+                                round_number=_ac_round,
+                                recommendation_idx=_rec_idx,
+                            )
+
+                            _rev_progress_cb = None
+                            if pipeline_ui:
+                                def _rev_progress_cb(msg, _rnd=_ac_round, _idx=_rec_idx):
+                                    pipeline_ui.step_progress("revision", f"[round {_rnd} rec {_idx}] {msg}")
+
+                            _rev_result = run_revision_agent(
+                                provider=_ac_provider,
+                                project_dir=path_resolver.get_project_dir(),
+                                prompt_text=_rev_prompt_text,
+                                timeout=_rev_timeout,
+                                round_number=_ac_round,
+                                recommendation_idx=_rec_idx,
+                                on_progress=_rev_progress_cb,
+                            )
+
+                            _rev_out = read_revision_outputs(
+                                path_resolver.get_project_dir(),
+                                round_number=_ac_round,
+                                recommendation_idx=_rec_idx,
+                            )
+                            _all_rev_responses.append(_rev_out)
+
+                            if _rev_out.get("response_path"):
+                                print(f"[AUTOINTERP]   Response written: {_rev_out['response_path']}")
+                            else:
+                                print(f"[AUTOINTERP]   Revision agent (rec {_rec_idx}) did not produce a Response file")
+
+                    except Exception as _rev_exc:
+                        logger.error("Revision phase (round %d) failed: %s", _ac_round, _rev_exc)
+                        print(f"[AUTOINTERP] Revision phase (round {_ac_round}) failed: {_rev_exc}")
+                        _round_rev_ok = False
+
+                    if not _round_rev_ok:
+                        break
+
+                    # ==============================================================
+                    # Report Revision — incorporate revisions into report
+                    # ==============================================================
+                    print(f"[AUTOINTERP] PHASE 7: Report Revision — incorporating revisions into report (round {_ac_round})")
+                    logger.info("Starting report revision phase for round %d", _ac_round)
+                    if pipeline_ui:
+                        pipeline_ui.step_progress("report_revision", f"Starting round {_ac_round}")
+                        if _ac_round == 1:
+                            pipeline_ui.step_start("report_revision")
+
+                    try:
+                        _rr_template = load_report_revision_prompt_template()
+                        _rr_prompt_text = _build_report_revision_prompt(_rr_template, round_number=_ac_round)
+                        _rr_timeout = autocritique_cfg.get("report_revision_timeout", 900)
+
+                        _rr_progress_cb = None
+                        if pipeline_ui:
+                            def _rr_progress_cb(msg, _rnd=_ac_round):
+                                pipeline_ui.step_progress("report_revision", f"[round {_rnd}] {msg}")
+
+                        _rr_result = run_report_revision_agent(
+                            provider=_ac_provider,
+                            project_dir=path_resolver.get_project_dir(),
+                            prompt_text=_rr_prompt_text,
+                            timeout=_rr_timeout,
+                            round_number=_ac_round,
+                            on_progress=_rr_progress_cb,
+                        )
+
+                        _rr_outputs = read_report_revision_outputs(
+                            path_resolver.get_project_dir(),
+                            round_number=_ac_round,
+                        )
+                        _rr_path = _rr_outputs.get("revised_report_path")
+
+                        if _rr_path:
+                            _revised_report_path = _rr_path
+                            _revised_report_filename = Path(_rr_path).name
+                            logger.info("Revised report at %s", _revised_report_path)
+                            print(f"[AUTOINTERP] Revised report written: {_revised_report_path}")
+                        else:
+                            logger.warning("Report revision agent (round %d) did not produce a revised report", _ac_round)
+                            print(f"[AUTOINTERP] Report revision agent (round {_ac_round}) did not produce a revised report")
+                            break  # can't re-review without a revised report
+
+                    except Exception as _rr_exc:
+                        logger.error("Report revision phase (round %d) failed: %s", _ac_round, _rr_exc)
+                        print(f"[AUTOINTERP] Report revision phase (round {_ac_round}) failed: {_rr_exc}")
+                        break
+
+                    # Loop back for another autocritique review
+                    _keep_reviewing = True
+
+                # ----------------------------------------------------------
+                # Finalize pipeline step statuses
+                # ----------------------------------------------------------
+                # AutoCritique step
+                if _ac_review_path:
+                    if pipeline_ui:
+                        pipeline_ui.step_complete("autocritique", summary=f"round {_ac_final_round} — {_ac_review_path}")
+                else:
+                    if pipeline_ui:
+                        pipeline_ui.step_failed("autocritique", error="No review file produced")
+
+                # Revision step
+                if _all_rev_responses:
+                    _n_responses = sum(1 for r in _all_rev_responses if r.get("response_path"))
+                    if pipeline_ui:
+                        # step_start may not have been called if no revisions were triggered
+                        step = pipeline_ui.steps.get("revision")
+                        if step and step.status == "running":
+                            pipeline_ui.step_complete("revision", summary=f"{_n_responses} responses across {_ac_final_round} round(s)")
+                elif pipeline_ui:
+                    step = pipeline_ui.steps.get("revision")
+                    if step and step.status == "pending":
+                        pipeline_ui.step_skipped("revision", reason="no revisions triggered")
+
+                # Report Revision step
+                if _revised_report_path:
+                    if pipeline_ui:
+                        step = pipeline_ui.steps.get("report_revision")
+                        if step and step.status == "running":
+                            pipeline_ui.step_complete("report_revision", summary=Path(_revised_report_path).name)
+                elif pipeline_ui:
+                    step = pipeline_ui.steps.get("report_revision")
+                    if step and step.status == "pending":
+                        pipeline_ui.step_skipped("report_revision", reason="no report revision triggered")
+
             else:
                 if _ac_provider in ("anthropic", "openai"):
                     print(f"[AUTOINTERP] AutoCritique: '{_ac_cli_name}' CLI not found; skipping")
@@ -3072,20 +3507,30 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                     print(f"[AUTOINTERP] AutoCritique: provider '{_ac_provider}' not supported; skipping")
                 if pipeline_ui:
                     pipeline_ui.step_skipped("autocritique", reason=f"CLI not available for {_ac_provider}")
+                    pipeline_ui.step_skipped("revision", reason="autocritique unavailable")
+                    pipeline_ui.step_skipped("report_revision", reason="autocritique unavailable")
         elif _ac_enabled and not _ac_use_agent:
             print("[AUTOINTERP] AutoCritique: agent mode disabled; skipping")
             if pipeline_ui:
                 pipeline_ui.step_skipped("autocritique", reason="agent mode disabled")
+                pipeline_ui.step_skipped("revision", reason="autocritique disabled")
+                pipeline_ui.step_skipped("report_revision", reason="autocritique disabled")
         else:
             if pipeline_ui:
                 pipeline_ui.step_skipped("autocritique", reason="disabled")
+                pipeline_ui.step_skipped("revision", reason="autocritique disabled")
+                pipeline_ui.step_skipped("report_revision", reason="autocritique disabled")
 
         # Print task completion message
         result = {
             "status": "completed",
             "task_name": task_name,
-            "report_path": report_result.get("report_path"),
+            "report_path": _revised_report_path or report_result.get("report_path"),
+            "original_report_path": report_result.get("report_path"),
             "autocritique_review_path": _ac_review_path,
+            "revised_report_path": _revised_report_path,
+            "revision_rounds_completed": _ac_final_round,
+            "revision_responses": [r.get("response_path") for r in _all_rev_responses if r.get("response_path")],
             "conclusion": report_result.get("conclusion"),
             "final_confidence": report_result.get("final_confidence")
         }
@@ -3154,31 +3599,31 @@ def build_argument_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--projects-dir", help="Root directory for projects", default=None)
     run_parser.set_defaults(command="run")
 
-    # context-pack: seed + forward/backward -> 3 papers -> PDFs + manifest -> optional LLM question
-    ctx_parser = subparsers.add_parser("context-pack", help="Build 3-paper context pack (seed + citing + cited), PDFs + manifest, optional research question")
+    # literature-search: seed + forward/backward -> 3 papers -> PDFs + manifest -> optional LLM question
+    ctx_parser = subparsers.add_parser("literature-search", help="Build 3-paper literature search (seed + citing + cited), PDFs + manifest, optional research question")
     ctx_parser.add_argument("--output-dir", default=None, help="Output directory; default: auto from generated question (projects/<slug>_<timestamp>/questions)")
     ctx_parser.add_argument("--graph", default=None, help="Path to graph_state.json (default: arxiv_interp_graph/output/graph_state.json)")
     ctx_parser.add_argument("--seed-id", default=None, help="Seed paper ID (default: random)")
     ctx_parser.add_argument("--seed", type=int, default=None, help="Random seed (default: different each run; set e.g. 42 for reproducibility)")
     ctx_parser.add_argument("--no-download", action="store_true", help="Do not download PDFs")
     ctx_parser.add_argument("--no-llm", action="store_true", help="Do not generate research question")
-    ctx_parser.set_defaults(command="context-pack")
+    ctx_parser.set_defaults(command="literature-search")
 
     parser.set_defaults(command="run")
     return parser
 
 
-def run_context_pack_cmd(args: argparse.Namespace) -> None:
-    """Build 3-paper context pack (seed + forward/backward), PDFs + manifest, optional LLM question."""
+def run_literature_search_cmd(args: argparse.Namespace) -> None:
+    """Build 3-paper literature search (seed + forward/backward), PDFs + manifest, optional LLM question."""
     pkg_root = Path(__file__).resolve().parent
     arxiv_interp_root = pkg_root / "arxiv_interp_graph"
     if str(arxiv_interp_root) not in sys.path:
         sys.path.insert(0, str(arxiv_interp_root))
     try:
-        from context_pack.run import run_context_pack
+        from literature_search.run import run_literature_search
         from api_client import SemanticScholarClient
     except ImportError as e:
-        print(f"[AUTOINTERP] ERROR: Cannot load context_pack (is arxiv_interp_graph present?): {e}")
+        print(f"[AUTOINTERP] ERROR: Cannot load literature_search (is arxiv_interp_graph present?): {e}")
         sys.exit(1)
     graph_path = args.graph
     if not graph_path:
@@ -3191,15 +3636,15 @@ def run_context_pack_cmd(args: argparse.Namespace) -> None:
         sys.exit(1)
     if args.output_dir is None:
         ts = get_timestamp("%Y-%m-%dT%H-%M-%S")
-        output_dir = (PACKAGE_ROOT / "projects" / f"context_pack_{ts}" / "questions").resolve()
+        output_dir = (PACKAGE_ROOT / "projects" / f"literature_search_{ts}" / "questions").resolve()
     else:
         output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[AUTOINTERP] Context pack output: {output_dir}")
+    print(f"[AUTOINTERP] Literature search output: {output_dir}")
     client = SemanticScholarClient()
     llm_generate_fn = None
     if getattr(args, "no_llm", False):
-        print("[AUTOINTERP] Skipping question generation (--no-llm). No context_pack_question.txt will be written.")
+        print("[AUTOINTERP] Skipping question generation (--no-llm). No literature_search_question.txt will be written.")
     if not getattr(args, "no_llm", False):
         try:
             last_llm = pkg_root / ".last_llm.json"
@@ -3214,7 +3659,7 @@ def run_context_pack_cmd(args: argparse.Namespace) -> None:
                     root = yaml.safe_load(f) or {}
                 llm_config = root.get("llm") or {}
             if llm_config and (llm_config.get("provider") or llm_config.get("model")):
-                from context_pack.llm_client import get_llm_generate_fn
+                from literature_search.llm_client import get_llm_generate_fn
                 llm_generate_fn = get_llm_generate_fn(
                     provider=llm_config.get("provider"),
                     model=llm_config.get("model"),
@@ -3224,8 +3669,8 @@ def run_context_pack_cmd(args: argparse.Namespace) -> None:
         except Exception as e:
             print("[AUTOINTERP] LLM config load failed:", e)
     if llm_generate_fn is None and not getattr(args, "no_llm", False):
-        print("[AUTOINTERP] No LLM config (.last_llm.json or config.yaml llm). No context_pack_question.txt will be written.")
-    result = run_context_pack(
+        print("[AUTOINTERP] No LLM config (.last_llm.json or config.yaml llm). No literature_search_question.txt will be written.")
+    result = run_literature_search(
         graph_path=graph_path,
         output_dir=output_dir,
         seed_id=args.seed_id,
@@ -3235,7 +3680,7 @@ def run_context_pack_cmd(args: argparse.Namespace) -> None:
         llm_generate_fn=llm_generate_fn,
     )
     papers = result.get("papers", [])
-    print(f"[AUTOINTERP] Context pack: {len(papers)} papers")
+    print(f"[AUTOINTERP] Literature search: {len(papers)} papers")
     for p in papers:
         print(f"  [{p.get('relation')}] {p.get('paperId', '')[:12]}... {p.get('title', '')[:50]}...")
     if result.get("manifest_path"):
@@ -3243,8 +3688,8 @@ def run_context_pack_cmd(args: argparse.Namespace) -> None:
     if result.get("question_path"):
         print(f"[AUTOINTERP] question: {result['question_path']}")
     elif llm_generate_fn is not None and not result.get("question_text"):
-        print("[AUTOINTERP] LLM was called but returned empty; context_pack_question.txt was not written.")
-    # Auto-rename project folder from context_pack_<ts> to <slug>_<ts> using QUESTION line
+        print("[AUTOINTERP] LLM was called but returned empty; literature_search_question.txt was not written.")
+    # Auto-rename project folder from literature_search_<ts> to <slug>_<ts> using QUESTION line
     if args.output_dir is None and result.get("question_text"):
         qtext = result["question_text"]
         q_match = re.search(r"QUESTION:\s*(.+?)(?:\n|$)", qtext, re.IGNORECASE | re.DOTALL)
@@ -3290,11 +3735,20 @@ async def async_main(args: argparse.Namespace) -> None:
 
         # Apply any saved user option defaults before anything reads config
         load_user_options(framework["config"])
+        load_manual_model_config(framework["config"])
 
-        # Provider and model selection
-        selected_provider, selected_model = select_provider_and_model()
+        # Provider and model selection (loops back if user picks Options or Manual)
+        while True:
+            selected_provider, selected_model = select_provider_and_model()
+            if selected_provider == "options":
+                show_options_menu(framework["config"])
+                continue
+            if selected_provider == "manual":
+                show_manual_config_menu(framework["config"])
+                break
+            break
 
-        # Apply provider/model override to config
+        # Apply provider/model override to config (no-op for manual)
         framework["config"] = apply_provider_model_override(
             framework["config"],
             selected_provider,
@@ -3310,13 +3764,8 @@ async def async_main(args: argparse.Namespace) -> None:
             except Exception:
                 pass
 
-        # Offer interactive options menu
-        opt_choice = input("\nPress [O] for Options, or Enter to continue: ").strip().lower()
-        if opt_choice == "o":
-            show_options_menu(framework["config"])
-
-        # Re-initialize components with updated config if provider was changed
-        if selected_provider != "manual":
+        # Re-initialize components with updated config
+        if True:
 
             # Get the updated config
             updated_config = framework["config"]
@@ -3386,16 +3835,16 @@ async def async_main(args: argparse.Namespace) -> None:
         print(f"\n{color_start}" + "="*60)
         print("Welcome to the AutoInterp Agent Framework!")
         print("="*60 + f"{color_end}")
-        context_pack_enabled = framework["config"].get("context_pack", {}).get("enabled", False)
-        if context_pack_enabled:
+        literature_search_enabled = framework["config"].get("literature_search", {}).get("enabled", False)
+        if literature_search_enabled:
             user_input = input("\nEnter a topic for LLM interpretability research (press Enter to generate one from the literature): ").strip()
         else:
             user_input = input("\nEnter a topic for LLM interpretability research (press Enter to generate one with LLM): ").strip()
 
         if not user_input:
-            if context_pack_enabled:
-                # Context pack will sample papers and generate a grounded question in the pipeline
-                print("[AUTOINTERP] No topic provided. The context pack will generate a research question from the literature.")
+            if literature_search_enabled:
+                # Literature search will sample papers and generate a grounded question in the pipeline
+                print("[AUTOINTERP] No topic provided. The literature search will generate a research question from the literature.")
                 framework["config"]["task"]["description"] = "LLM interpretability research"
             else:
                 print("[AUTOINTERP] No topic provided. Generating a topic with LLM...")
@@ -3450,12 +3899,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser = build_argument_parser()
     args = parser.parse_args(argv)
     command = getattr(args, "command", "run")
-    if command == "context-pack":
+    if command == "literature-search":
         try:
-            run_context_pack_cmd(args)
+            run_literature_search_cmd(args)
         except Exception as e:
             import traceback
-            print(f"[AUTOINTERP] Context pack failed: {e}")
+            print(f"[AUTOINTERP] Literature search failed: {e}")
             traceback.print_exc()
             sys.exit(1)
         return

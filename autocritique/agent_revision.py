@@ -1,6 +1,6 @@
 """
-Run an external AI agent (claude CLI or codex CLI) to perform an automated
-peer review (AutoCritique) of the generated research report.
+Run an external AI agent (claude CLI or codex CLI) to address a single
+AutoCritique recommendation via new or revised analysis work.
 """
 
 import logging
@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Agent command construction (mirrors agent_report.py)
+# Agent command construction (mirrors agent_autocritique.py)
 # ---------------------------------------------------------------------------
 
-def _get_autocritique_agent_command(
+def _get_revision_agent_command(
     provider: str,
     prompt_text: str,
     project_dir: Path,
@@ -56,66 +56,44 @@ def _get_autocritique_agent_command(
 # Prompt building
 # ---------------------------------------------------------------------------
 
-def _build_autocritique_prompt(
+def _build_revision_prompt(
     prompt_template: str,
-    round_number: int = 1,
-    revised_report_filename: Optional[str] = None,
+    round_number: int,
+    recommendation_idx: int,
 ) -> str:
     """
     Substitute placeholders in the prompt template.
 
-    Replaces ``{round_dir}`` with the round-specific subdirectory path
-    (e.g. ``./autocritique/round_1/``).
-
-    When *revised_report_filename* is provided (rounds 2+), inserts hints
-    telling the agent to read the revised report instead of the original.
+    Replaces ``{i}`` with the recommendation index and ``{k}`` with the
+    round number.  ``{n}`` is left literal so the agent sees it as-is
+    (it refers to analysis iteration numbers the agent discovers at runtime).
     """
-    round_dir = f"./autocritique/round_{round_number}/"
-    text = prompt_template.replace("{round_dir}", round_dir)
-
-    if revised_report_filename:
-        report_hint = (
-            f"IMPORTANT: This is review round {round_number}. A revised report "
-            f"has been produced after the previous round's revisions. The revised "
-            f"report is **{revised_report_filename}** in ./reports/. You must "
-            f"review the revised report, NOT the original."
-        )
-        report_instruction = (
-            f"Read the revised report **{revised_report_filename}** "
-            f"(not the original report or Reporter_log.md)."
-        )
-    else:
-        report_hint = ""
-        report_instruction = (
-            "Read the main .md file (not Reporter_log.md or any log files)."
-        )
-
-    text = text.replace("{report_hint}", report_hint)
-    text = text.replace("{report_instruction}", report_instruction)
-    return text
+    return (
+        prompt_template
+        .replace("{i}", str(recommendation_idx))
+        .replace("{k}", str(round_number))
+    )
 
 
 # ---------------------------------------------------------------------------
 # Agent subprocess execution
 # ---------------------------------------------------------------------------
 
-def run_autocritique_agent(
+def run_revision_agent(
     provider: str,
     project_dir: Path,
     prompt_text: str,
-    timeout: int = 600,
+    timeout: int = 1800,
     round_number: int = 1,
+    recommendation_idx: int = 1,
     on_progress: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """
-    Launch the CLI agent subprocess for autocritique and return the result.
-
-    *round_number* determines the output subdirectory
-    (``autocritique/round_1/``, ``autocritique/round_2/``, etc.).
+    Launch the CLI agent subprocess to address one recommendation.
 
     Returns ``{"success": bool, "stdout": str, "stderr": str, "returncode": int}``.
     """
-    result = _get_autocritique_agent_command(provider, prompt_text, project_dir)
+    result = _get_revision_agent_command(provider, prompt_text, project_dir)
     if result is None:
         cli_name = "claude" if (provider or "").lower() == "anthropic" else "codex"
         logger.warning(
@@ -130,23 +108,26 @@ def run_autocritique_agent(
     round_dir = cwd / "autocritique" / f"round_{round_number}"
     round_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.debug("Running autocritique agent round %d: %s (timeout=%ds)", round_number, cmd[0], timeout)
-    print(f"[AUTOINTERP] Running {cmd[0]} autocritique agent round {round_number} (timeout={timeout}s)...")
+    idx = recommendation_idx
+    logger.debug(
+        "Running revision agent round %d rec %d: %s (timeout=%ds)",
+        round_number, idx, cmd[0], timeout,
+    )
+    print(
+        f"[AUTOINTERP] Running {cmd[0]} revision agent "
+        f"(round {round_number}, recommendation {idx}, timeout={timeout}s)..."
+    )
 
     milestone = MilestoneSpec(
         watch_dir=round_dir,
         patterns=[
             MilestonePattern(
-                glob="AutoCritique_log.md",
-                message_fn=lambda _: "Wrote AutoCritique_log.md",
+                glob=f"Reviewer_{idx}_log.md",
+                message_fn=lambda _p, _idx=idx: f"Wrote Reviewer_{_idx}_log.md",
             ),
             MilestonePattern(
-                glob="AutoCritique_review.md",
-                message_fn=lambda _: "Wrote AutoCritique_review.md",
-            ),
-            MilestonePattern(
-                glob="Recommendation_*.md",
-                message_fn=lambda p: f"Wrote {Path(p).name}",
+                glob=f"Response_{idx}.md",
+                message_fn=lambda _p, _idx=idx: f"Wrote Response_{_idx}.md",
             ),
         ],
     )
@@ -162,12 +143,16 @@ def run_autocritique_agent(
     success = proc_result["success"]
     if not success:
         logger.warning(
-            "AutoCritique agent (round %d) exited with code %d. stderr: %s",
+            "Revision agent (round %d rec %d) exited with code %d. stderr: %s",
             round_number,
+            idx,
             proc_result["returncode"],
             proc_result["stderr"][:500],
         )
-        print(f"[AUTOINTERP] AutoCritique agent (round {round_number}) exited with code {proc_result['returncode']}")
+        print(
+            f"[AUTOINTERP] Revision agent (round {round_number} rec {idx}) "
+            f"exited with code {proc_result['returncode']}"
+        )
 
     return proc_result
 
@@ -176,34 +161,39 @@ def run_autocritique_agent(
 # Reading agent outputs
 # ---------------------------------------------------------------------------
 
-def read_autocritique_outputs(project_dir: Path, round_number: int = 1) -> Dict[str, Any]:
+def read_revision_outputs(
+    project_dir: Path,
+    round_number: int = 1,
+    recommendation_idx: int = 1,
+) -> Dict[str, Any]:
     """
-    Read the files produced by the autocritique agent for a given round.
+    Read the files produced by the revision agent for one recommendation.
 
-    Returns a dict with keys: ``review_path``, ``log_text``,
-    ``recommendations`` (list of paths), ``all_files``.
+    Returns a dict with keys: ``log_path``, ``response_path``, ``log_text``,
+    ``response_text``.
     """
     round_dir = project_dir / "autocritique" / f"round_{round_number}"
+    idx = recommendation_idx
     outputs: Dict[str, Any] = {
-        "review_path": None,
+        "log_path": None,
+        "response_path": None,
         "log_text": "",
-        "recommendations": [],
-        "all_files": [],
+        "response_text": "",
     }
 
     if not round_dir.exists():
         return outputs
 
-    for fpath in sorted(round_dir.iterdir()):
-        if not fpath.is_file():
-            continue
-        outputs["all_files"].append(str(fpath))
-        if fpath.name == "AutoCritique_log.md":
-            outputs["log_text"] = fpath.read_text(encoding="utf-8", errors="replace")
-        elif fpath.name == "AutoCritique_review.md":
-            outputs["review_path"] = str(fpath)
-        elif fpath.name.startswith("Recommendation_") and fpath.name.endswith(".md"):
-            outputs["recommendations"].append(str(fpath))
+    log_file = round_dir / f"Reviewer_{idx}_log.md"
+    response_file = round_dir / f"Response_{idx}.md"
+
+    if log_file.is_file():
+        outputs["log_path"] = str(log_file)
+        outputs["log_text"] = log_file.read_text(encoding="utf-8", errors="replace")
+
+    if response_file.is_file():
+        outputs["response_path"] = str(response_file)
+        outputs["response_text"] = response_file.read_text(encoding="utf-8", errors="replace")
 
     return outputs
 
@@ -212,11 +202,11 @@ def read_autocritique_outputs(project_dir: Path, round_number: int = 1) -> Dict[
 # Prompt template loading helper
 # ---------------------------------------------------------------------------
 
-def load_autocritique_prompt_template() -> str:
-    """Load the agent autocritique prompt template from prompts/agent_autocritique.yaml."""
-    prompt_path = PACKAGE_ROOT / "prompts" / "agent_autocritique.yaml"
+def load_revision_prompt_template() -> str:
+    """Load the agent revision prompt template from prompts/agent_revision.yaml."""
+    prompt_path = PACKAGE_ROOT / "prompts" / "agent_revision.yaml"
     if not prompt_path.exists():
-        raise FileNotFoundError(f"AutoCritique prompt template not found: {prompt_path}")
+        raise FileNotFoundError(f"Revision prompt template not found: {prompt_path}")
     with open(prompt_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data.get("prompt_template", "")

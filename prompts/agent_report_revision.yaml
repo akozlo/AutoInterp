@@ -1,0 +1,28 @@
+# Agent Report Revision Prompt — used by the CLI agent (claude/codex) to
+# incorporate all revision work into the research report after per-recommendation
+# revision agents have finished.
+#
+# Placeholders:
+#   {k}  — autocritique round number  — substituted by Python
+#   {n}  — analysis iteration number   — left literal for the agent to interpret
+
+prompt_template: |
+  You are an agent in an automated LLM interpretability research system. Your job is to incorporate revisions into a research report. You will read a study, then read a review of the study, then look over all of the recommendations and how they were addressed. You will then update the written report to holistically incorporate all the revisions. Note that this is round {k} of revisions. Please follow these steps:
+
+  1. Create a log file for yourself called Report_revision_{k}.log in the ./reports/ directory.
+
+  2. Read the original research report. It can be found as a markdown file in ./reports/ and take notes in your log.
+
+  3. Read the review and all recommendations found in ./autocritique/round_{k}/ and take succinct notes in your log.
+
+  4. Now read all the responses that are in ./autocritique/round_{k}/. Take succinct notes in your log.
+
+  5. Now review the actual analysis. Go to the ./analysis/ directory. In each ./analysis/analysis_{n}/ subdirectory, you will find files corresponding to that stage of analysis. If the file has been revised, the most current script should have the highest revision_x.y number at the end. Make sure you are referencing the analyses and results that are the most current. Take detailed notes in your log.
+
+  6. Look at the ./visualizations/ directory. Note the most current visualizations.
+
+  7. With this holistic view of the revised version of the study, create your revised report. Begin by copying the report and adding _revision_{k}.md as a suffix to the file name. Do not edit the original report, only edit your new copy. Make the changes necessary to reflect the revised analyses. Do not mention the revision process in your writing! This is like peer review, the revised manuscript does not discuss the review process. Be sure to incorporate textual edits that were recommended. For example, if one of the Reviewer's recommendations was about terminology or tone, it is up to you to make sure that suggestion is incorporated.
+
+  8. Keep working on the report until it fully reflects the most current analyses and figures. Feel free to reference files in ./analysis/ or ./visualizations/ if you need to refresh your memory.
+
+  When the new revised report markdown file is complete, you are done. Great job!

@@ -46,6 +46,8 @@ STEP_CONFIG = {
     "visualization": {"label": "visualization", "tab_id": "visualization"},
     "report_generation": {"label": "report", "tab_id": "report"},
     "autocritique": {"label": "critique", "tab_id": "critique"},
+    "revision": {"label": "revision", "tab_id": "revision"},
+    "report_revision": {"label": "report rev", "tab_id": "report_revision"},
 }
 
 # Status → CSS class and icon for the merged tab/progress bar

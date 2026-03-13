@@ -92,6 +92,8 @@ AGENT_DISPLAY_NAMES = {
     "reporter": "Reporter",
     "title_generator": "Title Generator",
     "autocritique_agent": "AutoCritique Agent",
+    "revision_agent": "Revision Agent",
+    "report_revision_agent": "Report Revision Agent",
 }
 
 
@@ -116,6 +118,8 @@ AGENT_STEP_MAP = {
     "reporter": "report_generation",
     "title_generator": "report_generation",
     "autocritique_agent": "autocritique",
+    "revision_agent": "revision",
+    "report_revision_agent": "report_revision",
 }
 
 
@@ -136,6 +140,8 @@ PIPELINE_STEPS = [
     ("visualization", "Visualization"),
     ("report_generation", "Report Generation"),
     ("autocritique", "AutoCritique"),
+    ("revision", "Revision"),
+    ("report_revision", "Report Revision"),
 ]
 
 
