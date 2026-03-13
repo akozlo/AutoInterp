@@ -140,6 +140,25 @@ ui:
   auto_open_browser: true  # Open dashboard in browser on pipeline start
 ```
 
+### Options Menu (`main.py`)
+
+At startup, after provider/model selection, the user is prompted `Press [O] for Options, or Enter to continue:`. Pressing `O` opens an interactive menu to override 8 common config settings without editing `config.yaml`:
+
+| # | Setting | Config Key | Type |
+|---|---------|-----------|------|
+| 1 | Max analysis iterations | `analysis.max_iterations` | int |
+| 2 | Confidence threshold | `analysis.confidence_threshold` | float (displayed as %) |
+| 3 | Use CLI agent for analysis | `analysis.use_agent` | bool |
+| 4 | Context pack (literature sampling) | `context_pack.enabled` | bool |
+| 5 | Visualization format | `visualization.default_format` | str (png/svg/pdf) |
+| 6 | Visualization DPI | `visualization.dpi` | int |
+| 7 | HTML dashboard | `ui.html_dashboard` | bool |
+| 8 | Auto-open browser | `ui.auto_open_browser` | bool |
+
+After editing, the user chooses "Just this time" (in-memory only) or "Make default" (persisted to `.user_options.json`). Saved defaults are loaded automatically on future runs via `load_user_options()`, which runs right after `initialize_framework()`. Only keys present in `OPTIONS_SETTINGS` are applied; stale keys in the JSON file are ignored.
+
+Key functions (all in `main.py`): `OPTIONS_SETTINGS`, `_get_config_value()`, `_set_config_value()`, `load_user_options()`, `save_user_options()`, `show_options_menu()`.
+
 ## Important File Locations
 
 | File | Purpose |
@@ -160,6 +179,7 @@ ui:
 | `prompts/agent_analysis.yaml` | Prompt template for analysis agent iterations |
 | `arxiv_interp_graph/enrich_arxiv_ids.py` | Batch-enrich graph with arxiv_id + open_access_url |
 | `.last_llm.json` | Persisted provider/model selection from last run |
+| `.user_options.json` | Persisted user option overrides (gitignored) |
 | `prompts/*.yaml` | Agent-specific prompt templates |
 
 ## Project Output Structure

@@ -16,6 +16,9 @@ venv/
 # HuggingFace model cache
 hf_models/
 
+# Semantic Scholar API response cache
+arxiv_interp_graph/.cache/
+
 # Package metadata
 *.egg-info/
 
@@ -27,6 +30,10 @@ logs/
 .claude/
 .idea/
 .vscode/
+
+# Runtime state
+.user_options.json
+.last_llm.json
 
 # Helper script to be deleted
 rebuild_notebook_from_data.py

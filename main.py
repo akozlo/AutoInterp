@@ -55,16 +55,20 @@ def select_provider_and_model() -> Tuple[str, str]:
     # Model mappings for each provider
     model_mappings = {
         "anthropic": {
+            "Claude Sonnet 4.6": "claude-sonnet-4-6",
+            "Claude Opus 4.6": "claude-opus-4-6",
             "Claude Sonnet 4.5": "claude-sonnet-4-5",
-            "Claude Opus 4.5": "claude-opus-4-5-20251101"
         },
         "openai": {
+            "GPT-5.4": "gpt-5.4",
             "GPT-5": "gpt-5-2025-08-07",
             "GPT-5-mini": "gpt-5-mini-2025-08-07"
         },
         "openrouter": {
+            "Claude Sonnet 4.6": "anthropic/claude-sonnet-4.6",
+            "Claude Opus 4.6": "anthropic/claude-opus-4.6",
+            "GPT-5.4": "openai/gpt-5.4",
             "Claude Sonnet 4.5": "anthropic/claude-sonnet-4.5",
-            "Claude Opus 4.5": "anthropic/claude-opus-4.5",
             "GPT-5": "openai/gpt-5",
             "GPT-5-mini": "openai/gpt-5-mini",
             "Kimi K2": "moonshotai/kimi-k2-0905",
@@ -157,6 +161,181 @@ def apply_provider_model_override(config: Dict[str, Any], provider: str, model_i
         config["llm"]["model"] = model_id
 
     return config
+
+
+# ---------------------------------------------------------------------------
+# Options menu — interactive settings override at startup
+# ---------------------------------------------------------------------------
+
+OPTIONS_SETTINGS = [
+    {"key": "analysis.max_iterations",       "label": "Max analysis iterations",       "type": "int",   "help": "Maximum analysis cycles per question"},
+    {"key": "analysis.confidence_threshold",  "label": "Confidence threshold",           "type": "float", "help": "Stop analysis above this confidence (0-100%)", "display_pct": True},
+    {"key": "analysis.use_agent",            "label": "Use CLI agent for analysis",     "type": "bool",  "help": "true = CLI agent, false = legacy pipeline"},
+    {"key": "context_pack.enabled",          "label": "Context pack (literature sampling)", "type": "bool", "help": "Sample papers and build literature context"},
+    {"key": "visualization.default_format",  "label": "Visualization format",           "type": "str",   "choices": ["png", "svg", "pdf"]},
+    {"key": "visualization.dpi",             "label": "Visualization DPI",              "type": "int",   "help": "Dots per inch for raster output"},
+    {"key": "ui.html_dashboard",             "label": "HTML dashboard",                 "type": "bool",  "help": "Generate auto-refreshing HTML dashboard"},
+    {"key": "ui.auto_open_browser",          "label": "Auto-open browser",              "type": "bool",  "help": "Open dashboard in browser on pipeline start"},
+]
+
+
+def _get_config_value(config: Dict[str, Any], dotted_key: str) -> Any:
+    """Read a nested config value using a dotted key like 'analysis.max_iterations'."""
+    parts = dotted_key.split(".")
+    node = config
+    for part in parts:
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return None
+    return node
+
+
+def _set_config_value(config: Dict[str, Any], dotted_key: str, value: Any) -> None:
+    """Write a nested config value using a dotted key."""
+    parts = dotted_key.split(".")
+    node = config
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+    node[parts[-1]] = value
+
+
+def load_user_options(config: Dict[str, Any]) -> None:
+    """Load .user_options.json and apply saved overrides to *config* in-place."""
+    options_path = Path(__file__).parent / ".user_options.json"
+    if not options_path.exists():
+        return
+    try:
+        with open(options_path, "r") as f:
+            saved = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+    valid_keys = {s["key"] for s in OPTIONS_SETTINGS}
+    for key, value in saved.items():
+        if key in valid_keys:
+            _set_config_value(config, key, value)
+
+
+def save_user_options(changed: Dict[str, Any]) -> None:
+    """Merge *changed* settings into .user_options.json."""
+    options_path = Path(__file__).parent / ".user_options.json"
+    existing: Dict[str, Any] = {}
+    if options_path.exists():
+        try:
+            with open(options_path, "r") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    existing.update(changed)
+    with open(options_path, "w") as f:
+        json.dump(existing, f, indent=2)
+
+
+def _format_value(setting: Dict[str, Any], value: Any) -> str:
+    """Format a config value for display."""
+    if setting.get("display_pct") and isinstance(value, (int, float)):
+        return f"{int(value * 100)}%"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _parse_input(setting: Dict[str, Any], raw: str) -> Any:
+    """Parse and validate user input for a setting. Returns the parsed value or raises ValueError."""
+    stype = setting["type"]
+    raw = raw.strip()
+    if stype == "int":
+        v = int(raw)
+        if v <= 0:
+            raise ValueError("Must be a positive integer")
+        return v
+    elif stype == "float":
+        if setting.get("display_pct"):
+            v = float(raw.rstrip("%"))
+            if not (0 < v <= 100):
+                raise ValueError("Must be between 1 and 100")
+            return v / 100.0
+        v = float(raw)
+        if v <= 0:
+            raise ValueError("Must be positive")
+        return v
+    elif stype == "bool":
+        if raw.lower() in ("true", "t", "yes", "y", "1"):
+            return True
+        if raw.lower() in ("false", "f", "no", "n", "0"):
+            return False
+        raise ValueError("Enter true or false")
+    elif stype == "str":
+        choices = setting.get("choices")
+        if choices and raw.lower() not in choices:
+            raise ValueError(f"Choose from: {', '.join(choices)}")
+        return raw.lower()
+    return raw
+
+
+def show_options_menu(config: Dict[str, Any]) -> None:
+    """Interactive options menu. Modifies *config* in-place and optionally persists."""
+    changed: Dict[str, Any] = {}
+
+    while True:
+        print("\n" + "=" * 50)
+        print("Options")
+        print("=" * 50)
+        for i, s in enumerate(OPTIONS_SETTINGS, 1):
+            val = _get_config_value(config, s["key"])
+            display = _format_value(s, val)
+            dots = "." * (40 - len(s["label"]))
+            print(f"[{i}] {s['label']} {dots} {display}")
+
+        choice = input("\nEnter number to edit, or press Enter to finish: ").strip()
+        if not choice:
+            break
+        try:
+            idx = int(choice) - 1
+            if not (0 <= idx < len(OPTIONS_SETTINGS)):
+                print("Invalid number.")
+                continue
+        except ValueError:
+            print("Invalid input.")
+            continue
+
+        setting = OPTIONS_SETTINGS[idx]
+        current = _get_config_value(config, setting["key"])
+        display = _format_value(setting, current)
+        hint = ""
+        if setting.get("choices"):
+            hint = f" ({'/'.join(setting['choices'])})"
+        elif setting["type"] == "bool":
+            hint = " (true/false)"
+        elif setting.get("display_pct"):
+            hint = " (%)"
+
+        raw = input(f"{setting['label']}{hint} [{display}]: ").strip()
+        if not raw:
+            continue
+
+        try:
+            new_val = _parse_input(setting, raw)
+        except ValueError as e:
+            print(f"  Invalid: {e}")
+            continue
+
+        _set_config_value(config, setting["key"], new_val)
+        changed[setting["key"]] = new_val
+
+    if not changed:
+        return
+
+    print("\nSave changes:")
+    print("[1] Just this time")
+    print("[2] Make default (save to .user_options.json)")
+    save_choice = input("Choice [1]: ").strip()
+    if save_choice == "2":
+        save_user_options(changed)
+        print("Options saved.")
+    else:
+        print("Options applied for this run.")
+
 
 async def initialize_framework(
     config_path: Optional[str] = None,
@@ -2765,6 +2944,9 @@ async def async_main(args: argparse.Namespace) -> None:
         # Initialize framework
         framework = await initialize_framework(args.config, args.venv, args.projects_dir)
 
+        # Apply any saved user option defaults before anything reads config
+        load_user_options(framework["config"])
+
         # Provider and model selection
         selected_provider, selected_model = select_provider_and_model()
 
@@ -2783,6 +2965,11 @@ async def async_main(args: argparse.Namespace) -> None:
                     json.dump({"provider": selected_provider, "model": selected_model}, f, indent=0)
             except Exception:
                 pass
+
+        # Offer interactive options menu
+        opt_choice = input("\nPress [O] for Options, or Enter to continue: ").strip().lower()
+        if opt_choice == "o":
+            show_options_menu(framework["config"])
 
         # Re-initialize components with updated config if provider was changed
         if selected_provider != "manual":

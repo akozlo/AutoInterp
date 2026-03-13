@@ -127,6 +127,28 @@ Key outputs:
 - `projects/<project_id>/literature/Research_Questions.txt` (agent output, if agent was used)
 - `projects/<project_id>/questions/questions.txt` (questions for prioritizer)
 
+### Options Menu
+
+After selecting a provider and model, the CLI prompts `Press [O] for Options, or Enter to continue:`. Pressing `O` opens an interactive menu to adjust common settings without editing `config.yaml`:
+
+```
+==================================================
+Options
+==================================================
+[1] Max analysis iterations ............ 6
+[2] Confidence threshold ............... 85%
+[3] Use CLI agent for analysis ......... true
+[4] Context pack (literature sampling) . true
+[5] Visualization format ............... png
+[6] Visualization DPI .................. 300
+[7] HTML dashboard ..................... true
+[8] Auto-open browser .................. true
+
+Enter number to edit, or press Enter to finish:
+```
+
+After editing, you can apply changes for the current run only or save them as persistent defaults in `.user_options.json`. Saved defaults are loaded automatically on future runs and override `config.yaml` values. Press Enter at the prompt to skip the menu entirely.
+
 ### Sandboxed Execution with Docker
 
 - Enable the sandbox by setting `analysis.execution.sandbox: true` (default) in `config.yaml`. When enabled, AutoInterp runs generated analysis scripts inside a Docker container instead of directly on the host.
