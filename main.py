@@ -44,6 +44,17 @@ from AutoInterp.analysis.agent_analysis import (
     read_confidence,
 )
 from AutoInterp.reporting.report_generator import ReportGenerator
+from AutoInterp.reporting.agent_report import (
+    load_report_prompt_template,
+    _build_report_prompt,
+    run_report_agent,
+    read_report_outputs,
+)
+from AutoInterp.core.interactive import (
+    interactive_checkpoint,
+    make_revision_call,
+    is_interactive,
+)
 
 def select_provider_and_model() -> Tuple[str, str]:
     """
@@ -171,11 +182,13 @@ OPTIONS_SETTINGS = [
     {"key": "analysis.max_iterations",       "label": "Max analysis iterations",       "type": "int",   "help": "Maximum analysis cycles per question"},
     {"key": "analysis.confidence_threshold",  "label": "Confidence threshold",           "type": "float", "help": "Stop analysis above this confidence (0-100%)", "display_pct": True},
     {"key": "analysis.use_agent",            "label": "Use CLI agent for analysis",     "type": "bool",  "help": "true = CLI agent, false = legacy pipeline"},
+    {"key": "reporting.use_agent",           "label": "Use CLI agent for report",       "type": "bool",  "help": "true = CLI agent, false = legacy pipeline"},
     {"key": "context_pack.enabled",          "label": "Context pack (literature sampling)", "type": "bool", "help": "Sample papers and build literature context"},
     {"key": "visualization.default_format",  "label": "Visualization format",           "type": "str",   "choices": ["png", "svg", "pdf"]},
     {"key": "visualization.dpi",             "label": "Visualization DPI",              "type": "int",   "help": "Dots per inch for raster output"},
     {"key": "ui.html_dashboard",             "label": "HTML dashboard",                 "type": "bool",  "help": "Generate auto-refreshing HTML dashboard"},
     {"key": "ui.auto_open_browser",          "label": "Auto-open browser",              "type": "bool",  "help": "Open dashboard in browser on pipeline start"},
+    {"key": "interactive_mode",              "label": "Interactive mode (feedback loops)", "type": "bool", "help": "Pause after each stage for user review and revision"},
 ]
 
 
@@ -643,9 +656,30 @@ async def generate_questions(
         except Exception as e:
             print(f"[AUTOINTERP] Error reading raw questions: {e}")
     
+    # Interactive checkpoint: let user revise questions before proceeding
+    if raw_questions_path.exists() and is_interactive(config):
+        try:
+            with open(raw_questions_path, 'r') as f:
+                current_questions = f.read()
+
+            async def _revise_questions(current: str, feedback: str) -> str:
+                return await make_revision_call(
+                    llm_interface, "question_generator", current, feedback, "question_generation"
+                )
+
+            def _save_questions(text: str) -> None:
+                with open(raw_questions_path, 'w') as f:
+                    f.write(text)
+
+            await interactive_checkpoint(
+                "Question Generation", current_questions, _revise_questions, _save_questions, config
+            )
+        except Exception as e:
+            logger.warning(f"Interactive checkpoint failed for question generation: {e}")
+
     # For logging - we don't have structured questions anymore, just carry on
     logger.info("Generated initial questions - see raw text output in console")
-    
+
     # Return empty list since we now use raw text files instead of structured questions
     return []
 
@@ -703,7 +737,25 @@ async def prioritize_questions(
             print("\n============= QUESTION PRIORITIZER OUTPUT =============")
             print(prioritized_text)
             print("========================================================\n")
-            
+
+            # Interactive checkpoint: let user revise prioritized question before title extraction
+            if is_interactive(config):
+                try:
+                    async def _revise_prioritized(current: str, feedback: str) -> str:
+                        return await make_revision_call(
+                            llm_interface, "question_prioritizer", current, feedback, "question_prioritization"
+                        )
+
+                    def _save_prioritized(text: str) -> None:
+                        with open(prioritized_path, 'w') as f:
+                            f.write(text)
+
+                    prioritized_text = await interactive_checkpoint(
+                        "Question Prioritization", prioritized_text, _revise_prioritized, _save_prioritized, config
+                    )
+                except Exception as e:
+                    logger.warning(f"Interactive checkpoint failed for question prioritization: {e}")
+
             # Extract TITLE from the prioritized text if available
             import re  # Make sure re is imported in this scope
             title_match = re.search(r'TITLE:\s*(.*?)(?:\n|$)', prioritized_text, re.IGNORECASE)
@@ -881,7 +933,30 @@ async def analyze_question(
         
         logger.info(f"Generated analysis plan at {plan_path}")
         print(f"[AUTOINTERP] Generated analysis plan at {plan_path}")
-        
+
+        # Interactive checkpoint: let user revise analysis plan before code generation
+        if is_interactive(config):
+            try:
+                _planner_llm = analysis_planner.llm_interface
+
+                async def _revise_plan(current: str, feedback: str) -> str:
+                    return await make_revision_call(
+                        _planner_llm, "analysis_planner", current, feedback, "analysis_plan"
+                    )
+
+                def _save_plan(text: str) -> None:
+                    nonlocal analysis_plan
+                    analysis_plan = text
+                    if plan_path and Path(plan_path).exists():
+                        with open(plan_path, 'w') as f:
+                            f.write(text)
+
+                analysis_plan = await interactive_checkpoint(
+                    "Analysis Plan", analysis_plan, _revise_plan, _save_plan, config
+                )
+            except Exception as e:
+                logger.warning(f"Interactive checkpoint failed for analysis plan: {e}")
+
         # Next, generate analysis code based on the plan
         logger.info("Generating analysis script from plan...")
         print(f"[AUTOINTERP] Generating analysis script from plan...")
@@ -1346,7 +1421,26 @@ async def iterative_analysis(
             
             # Update confidence with the new value from evaluation
             current_confidence = evaluation_result.get("new_confidence", current_confidence)
-            
+
+            # Interactive feedback: show evaluation and collect guidance for next iteration
+            if is_interactive(config) and iteration < max_iterations - 1:
+                eval_summary = evaluation_result.get("raw_evaluation", "")
+                if eval_summary:
+                    print(f"\n[INTERACTIVE] === Evaluation (Iteration {iteration + 1}) ===")
+                    print(eval_summary[:2000])
+                    if len(eval_summary) > 2000:
+                        print(f"... ({len(eval_summary) - 2000} more characters)")
+                try:
+                    user_guidance = input("[INTERACTIVE] Feedback for next analysis iteration (Enter to continue): ").strip()
+                    if user_guidance:
+                        # Store guidance so the planner can incorporate it
+                        config.setdefault("_interactive_guidance", []).append(
+                            f"User feedback after iteration {iteration + 1}: {user_guidance}"
+                        )
+                        print(f"[INTERACTIVE] Guidance noted for next iteration.")
+                except (EOFError, KeyboardInterrupt):
+                    pass
+
             # Check if we've reached our confidence threshold
             # Skip confidence check if all ANALYSIS_FAILED retries were exhausted
             # Only stop when confidence is HIGH (>= threshold), not when low
@@ -1590,6 +1684,25 @@ async def iterative_analysis_agent(
         else:
             consecutive_failures = 0
             print(f"[AUTOINTERP] Agent iteration {iteration} complete. Confidence: {new_confidence:.2f}")
+
+        # Interactive feedback: show evaluation and collect guidance for next agent iteration
+        if is_interactive(config) and iteration < max_iterations:
+            eval_text = outputs.get("evaluation", "")
+            if eval_text:
+                print(f"\n[INTERACTIVE] === Agent Evaluation (Iteration {iteration}) ===")
+                print(eval_text[:2000])
+                if len(eval_text) > 2000:
+                    print(f"... ({len(eval_text) - 2000} more characters)")
+            try:
+                user_feedback = input("[INTERACTIVE] Feedback for next iteration (Enter to continue): ").strip()
+                if user_feedback:
+                    # Write feedback to background/user_feedback.md for next iteration's prompt
+                    feedback_path = analysis_root / "background" / "user_feedback.md"
+                    with open(feedback_path, "a", encoding="utf-8") as f:
+                        f.write(f"\n## User Feedback After Iteration {iteration}\n{user_feedback}\n")
+                    print(f"[INTERACTIVE] Feedback saved for next iteration.")
+            except (EOFError, KeyboardInterrupt):
+                pass
 
         # Check confidence threshold
         if new_confidence >= confidence_threshold:
@@ -2405,11 +2518,116 @@ async def generate_report(
     
     # Generate visualizations using the full pipeline
     visualizations = await generate_visualizations(successful_analyses, framework)
+
+    # Interactive feedback on visualizations
+    _viz_feedback = ""
+    if is_interactive(config) and visualizations:
+        viz_summary = f"Generated {len(visualizations)} visualizations:\n"
+        for name, path in visualizations.items():
+            viz_summary += f"  - {name}: {path}\n"
+        print(f"\n[INTERACTIVE] === Visualizations ===\n{viz_summary}")
+        try:
+            _viz_feedback = input("[INTERACTIVE] Feedback on visualizations (Enter to continue): ").strip()
+            if _viz_feedback:
+                print(f"[INTERACTIVE] Visualization feedback noted — will be passed to report generation.")
+        except (EOFError, KeyboardInterrupt):
+            pass
+    # Store viz feedback in config so report agent/generator can use it
+    if _viz_feedback:
+        config["_visualization_feedback"] = _viz_feedback
+
     if pipeline_ui:
         pipeline_ui.step_complete("visualization", summary=f"{len(visualizations)} visualizations")
         pipeline_ui.step_start("report_generation")
 
-    # Generate report (let the report generator handle title generation)
+    # ------------------------------------------------------------------
+    # Decide whether to use agent or legacy report generation
+    # ------------------------------------------------------------------
+    import shutil as _shutil
+    reporting_cfg = config.get("reporting", {})
+    _report_use_agent = reporting_cfg.get("use_agent", False)
+    _provider = (config.get("llm", {}).get("provider") or "").lower()
+    _report_agent_available = (
+        _report_use_agent
+        and _provider in ("anthropic", "openai")
+        and _shutil.which("claude" if _provider == "anthropic" else "codex") is not None
+    )
+
+    if _report_agent_available:
+        # --- Agent-based report generation ---
+        print("[AUTOINTERP] Using CLI agent for report generation")
+        logger.info("Using CLI agent for report generation (provider=%s)", _provider)
+
+        try:
+            prompt_template = load_report_prompt_template()
+        except FileNotFoundError as exc:
+            logger.error("Could not load report prompt template: %s", exc)
+            print(f"[AUTOINTERP] ERROR: {exc}; falling back to legacy reporter")
+            _report_agent_available = False  # fall through to legacy below
+
+        if _report_agent_available:
+            prompt_text = _build_report_prompt(prompt_template)
+            agent_timeout = reporting_cfg.get("agent_timeout", 900)
+
+            _report_progress_cb = None
+            if pipeline_ui:
+                def _report_progress_cb(msg):
+                    pipeline_ui.step_progress("report_generation", msg)
+
+            agent_result = run_report_agent(
+                provider=_provider,
+                project_dir=path_resolver.get_project_dir(),
+                prompt_text=prompt_text,
+                timeout=agent_timeout,
+                on_progress=_report_progress_cb,
+            )
+
+            outputs = read_report_outputs(path_resolver.get_project_dir())
+            report_path = outputs.get("report_path")
+
+            if report_path:
+                logger.info("Agent generated report at %s", report_path)
+                print(f"[AUTOINTERP] Agent generated report at {report_path}")
+
+                # Interactive checkpoint on the agent-generated report
+                if is_interactive(config):
+                    try:
+                        report_content = Path(report_path).read_text(encoding="utf-8")
+                        _report_llm = framework.get("llm_interface") or LLMInterface(config, agent_name="reporter")
+
+                        async def _revise_report_agent(current: str, feedback: str) -> str:
+                            return await make_revision_call(
+                                _report_llm, "reporter", current, feedback, "report"
+                            )
+
+                        def _save_report_agent(text: str) -> None:
+                            Path(report_path).write_text(text, encoding="utf-8")
+
+                        await interactive_checkpoint(
+                            "Report", report_content, _revise_report_agent, _save_report_agent, config
+                        )
+                    except Exception as e:
+                        logger.warning(f"Interactive checkpoint failed for agent report: {e}")
+
+                if pipeline_ui:
+                    pipeline_ui.step_complete("report_generation", summary=str(report_path))
+                return {
+                    "report_path": report_path,
+                    "conclusion": conclusion_type,
+                    "final_confidence": final_confidence,
+                }
+            else:
+                logger.warning("Report agent finished but no report .md found; falling back to legacy reporter")
+                print("[AUTOINTERP] Report agent did not produce a report; falling back to legacy reporter")
+
+    # --- Legacy report generation (or fallback from agent failure) ---
+    if _report_use_agent and not _report_agent_available:
+        if _provider in ("anthropic", "openai"):
+            cli_name = "claude" if _provider == "anthropic" else "codex"
+            print(f"[AUTOINTERP] Agent mode enabled but '{cli_name}' CLI not found; falling back to legacy reporter")
+        elif _provider:
+            print(f"[AUTOINTERP] Agent mode not supported for provider '{_provider}'; using legacy reporter")
+
     try:
         task_description = config.get("task", {}).get("description", "")
         task_name = task_description[:50] + "..." if len(task_description) > 50 else task_description or "Unnamed Task"
@@ -2424,6 +2642,27 @@ async def generate_report(
 
         logger.info(f"Generated report at {report_path}")
         print(f"[AUTOINTERP] Generated comprehensive report at {report_path}")
+
+        # Interactive checkpoint on the legacy-generated report
+        if is_interactive(config) and report_path and Path(report_path).exists():
+            try:
+                report_content = Path(report_path).read_text(encoding="utf-8")
+                _legacy_llm = framework.get("llm_interface") or LLMInterface(config, agent_name="reporter")
+
+                async def _revise_report_legacy(current: str, feedback: str) -> str:
+                    return await make_revision_call(
+                        _legacy_llm, "reporter", current, feedback, "report"
+                    )
+
+                def _save_report_legacy(text: str) -> None:
+                    Path(report_path).write_text(text, encoding="utf-8")
+
+                await interactive_checkpoint(
+                    "Report", report_content, _revise_report_legacy, _save_report_legacy, config
+                )
+            except Exception as e:
+                logger.warning(f"Interactive checkpoint failed for legacy report: {e}")
+
         if pipeline_ui:
             pipeline_ui.step_complete("report_generation", summary=str(report_path))
 
@@ -2441,32 +2680,32 @@ async def generate_report(
         # Create a simple markdown report as fallback
         simple_report = f"# Interpretability Report: {task_name}\n\n"
         simple_report += f"## Question\n"
-        
+
         simple_report += f"{active_question}\n\n"
-            
+
         simple_report += f"## Conclusion\nThe question is {conclusion_text} with {final_confidence:.2f} confidence.\n\n"
         simple_report += f"## Analysis Summary\nPerformed {len(all_analyses)} analyses.\n\n"
-        
+
         if all_evaluations and "key_insights" in all_evaluations[-1]:
             simple_report += "## Key Insights\n"
             for insight in all_evaluations[-1]["key_insights"]:
                 simple_report += f"- {insight}\n"
-        
+
         # Get the latest report path from the path resolver
         path_resolver = PathResolver()
         reports_dir = path_resolver.ensure_path("reports")
         report_path = reports_dir / "simple_report.md"
-        
+
         # Ensure the directory exists
         reports_dir.mkdir(exist_ok=True, parents=True)
-        
+
         # Save simple report
         with open(report_path, "w") as f:
             f.write(simple_report)
-        
+
         logger.info(f"Generated simple report at {report_path}")
         print(f"[AUTOINTERP] Generated simple report at {report_path}")
-        
+
         return {
             "report_path": str(report_path),
             "conclusion": conclusion_type,
@@ -2606,6 +2845,28 @@ async def streamlined_pipeline(framework: Dict[str, Any]) -> Dict[str, Any]:
                         (questions_dir / "questions.txt").write_text(question_text, encoding="utf-8")
                         use_context_pack_question = True
                         print(f"[AUTOINTERP] Context pack done: 3 papers, manifest + PDFs in literature/, question in questions/questions.txt")
+
+                        # Interactive checkpoint: let user revise context-pack questions
+                        if is_interactive(config):
+                            try:
+                                _cp_llm = framework["llm_interface"]
+                                _cp_questions_file = questions_dir / "questions.txt"
+
+                                async def _revise_cp_questions(current: str, feedback: str) -> str:
+                                    return await make_revision_call(
+                                        _cp_llm, "question_generator", current, feedback, "question_generation"
+                                    )
+
+                                def _save_cp_questions(text: str) -> None:
+                                    nonlocal question_text
+                                    question_text = text
+                                    _cp_questions_file.write_text(text, encoding="utf-8")
+
+                                question_text = await interactive_checkpoint(
+                                    "Context Pack Questions", question_text, _revise_cp_questions, _save_cp_questions, config
+                                )
+                            except Exception as e:
+                                logger.warning(f"Interactive checkpoint failed for context pack questions: {e}")
 
                         # Record the context pack interaction in the dashboard
                         if pipeline_ui:

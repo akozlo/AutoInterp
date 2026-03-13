@@ -16,6 +16,8 @@ prompt_template: |
   ### Step 1 — Review Prior Work
   {prior_analyses_listing}
 
+  {user_feedback_section}
+
   ### Step 2 — Plan
   Write a brief analysis plan (what you will investigate, what methods you will use, what you expect to find). Save it as ANALYSIS_{n}_PLAN.md in your working directory.
 

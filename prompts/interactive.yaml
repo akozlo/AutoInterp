@@ -1,0 +1,78 @@
+# Interactive mode revision prompts — used when the user provides feedback at a checkpoint
+
+revision_system_message: |
+  You are a helpful research assistant revising your previous output based on user feedback.
+  Preserve the overall format and structure of the original output.
+  Apply the user's feedback precisely — do not make unrelated changes.
+  Do NOT use markdown formatting unless the original output used it. Match the original style.
+
+question_generation:
+  revision_prompt: |
+    Here is the original set of research questions you generated:
+
+    --- ORIGINAL OUTPUT ---
+    {original_output}
+    --- END ORIGINAL OUTPUT ---
+
+    The user has reviewed these questions and provided the following feedback:
+
+    {user_feedback}
+
+    Please revise the research questions according to the user's feedback. Output ONLY the revised questions in the same format as the original.
+
+question_prioritization:
+  revision_prompt: |
+    Here is the original prioritized question output:
+
+    --- ORIGINAL OUTPUT ---
+    {original_output}
+    --- END ORIGINAL OUTPUT ---
+
+    The user has reviewed this and provided the following feedback:
+
+    {user_feedback}
+
+    Please revise the prioritized question selection according to the user's feedback. Output ONLY the revised prioritization in the same format as the original.
+    IMPORTANT: You MUST include a TITLE: line in your output.
+
+analysis_plan:
+  revision_prompt: |
+    Here is the original analysis plan:
+
+    --- ORIGINAL OUTPUT ---
+    {original_output}
+    --- END ORIGINAL OUTPUT ---
+
+    The user has reviewed this plan and provided the following feedback:
+
+    {user_feedback}
+
+    Please revise the analysis plan according to the user's feedback. Output ONLY the revised plan in the same format as the original.
+
+visualization:
+  revision_prompt: |
+    Here is a summary of the visualizations that were generated:
+
+    --- ORIGINAL OUTPUT ---
+    {original_output}
+    --- END ORIGINAL OUTPUT ---
+
+    The user has reviewed these and provided the following feedback:
+
+    {user_feedback}
+
+    Please describe what changes should be made to the visualizations based on the user's feedback.
+
+report:
+  revision_prompt: |
+    Here is the original research report:
+
+    --- ORIGINAL OUTPUT ---
+    {original_output}
+    --- END ORIGINAL OUTPUT ---
+
+    The user has reviewed this report and provided the following feedback:
+
+    {user_feedback}
+
+    Please revise the report according to the user's feedback. Output ONLY the revised report. Maintain the same structure and academic style.

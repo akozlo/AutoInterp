@@ -139,11 +139,28 @@ def _build_analysis_prompt(
         prior_listing = "This is the first analysis iteration. No prior work to review."
         prior_instructions = ""
 
+    # Build user feedback section from interactive mode
+    user_feedback_section = ""
+    feedback_path = analysis_root / "background" / "user_feedback.md"
+    if feedback_path.exists():
+        try:
+            feedback_content = feedback_path.read_text(encoding="utf-8").strip()
+            if feedback_content:
+                user_feedback_section = (
+                    "### User Guidance\n"
+                    "The user has provided the following feedback on prior iterations:\n\n"
+                    f"{feedback_content}\n\n"
+                    "Incorporate this guidance into your analysis plan.\n"
+                )
+        except OSError:
+            pass
+
     prompt = prompt_template.replace("{n}", str(iteration_n))
     prompt = prompt.replace("{model_name}", model_name)
     prompt = prompt.replace("{model_path}", model_path)
     prompt = prompt.replace("{prior_analyses_listing}", prior_listing)
     prompt = prompt.replace("{prior_analyses_instructions}", prior_instructions)
+    prompt = prompt.replace("{user_feedback_section}", user_feedback_section)
     return prompt
 
 

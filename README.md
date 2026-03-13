@@ -69,7 +69,9 @@ Optionally configure `config.yaml` with custom settings:
    - Visualization settings
    - Resource limits
    - Context pack settings (`context_pack.use_agent`, `context_pack.agent_timeout`)
+   - Reporting settings (`reporting.use_agent`, `reporting.agent_timeout`)
    - Pipeline UI settings (`ui.html_dashboard`, `ui.dashboard_refresh`, `ui.auto_open_browser`)
+   - Interactive mode (`interactive_mode: true` to pause after each stage for user feedback)
 
 ## Usage
 
@@ -138,16 +140,27 @@ Options
 [1] Max analysis iterations ............ 6
 [2] Confidence threshold ............... 85%
 [3] Use CLI agent for analysis ......... true
-[4] Context pack (literature sampling) . true
-[5] Visualization format ............... png
-[6] Visualization DPI .................. 300
-[7] HTML dashboard ..................... true
-[8] Auto-open browser .................. true
+[4] Use CLI agent for report ........... true
+[5] Context pack (literature sampling) . true
+[6] Visualization format ............... png
+[7] Visualization DPI .................. 300
+[8] HTML dashboard ..................... true
+[9] Auto-open browser .................. true
+[10] Interactive mode (feedback loops) . false
 
 Enter number to edit, or press Enter to finish:
 ```
 
 After editing, you can apply changes for the current run only or save them as persistent defaults in `.user_options.json`. Saved defaults are loaded automatically on future runs and override `config.yaml` values. Press Enter at the prompt to skip the menu entirely.
+
+### Interactive Mode
+
+Set `interactive_mode: true` in `config.yaml` (or toggle via the Options menu) to enable feedback loops. The pipeline pauses after each major stage and displays its output. You can then:
+
+- **Press Enter** to accept the output and continue to the next stage.
+- **Type feedback** and press Enter to have the LLM revise the output. The revised version is displayed and you can provide additional feedback or press Enter to continue.
+
+Interactive mode adds checkpoints after: question generation, question prioritization, analysis plans (legacy mode), analysis evaluations (both modes), visualizations, and the final report. In agent mode analysis, user feedback between iterations is saved to `analysis/background/user_feedback.md` and automatically incorporated into the next iteration's prompt.
 
 ### Sandboxed Execution with Docker
 
@@ -167,6 +180,8 @@ After editing, you can apply changes for the current run only or save them as pe
 ├── __init__.py                 # Package entry and exports
 ├── __main__.py                 # Enables `python -m AutoInterp`
 ├── core/
+│   ├── agent_subprocess.py     # Shared Popen + filesystem-polling runner for CLI agents
+│   ├── interactive.py          # Interactive mode: feedback loops and LLM revision calls
 │   ├── llm_interface.py        # Manages cognitive loop and interactions with LLM
 │   ├── pipeline_ui.py          # Pipeline UI — step tracking and HTML dashboard
 │   ├── dashboard_template.py   # HTML template and render helpers for dashboard
@@ -178,16 +193,20 @@ After editing, you can apply changes for the current run only or save them as pe
 │
 ├── prompts/
 │   ├── prompts.yaml            # Main prompts configuration file
+│   ├── interactive.yaml        # Revision prompts for interactive mode feedback loops
+│   ├── agent_analysis.yaml     # Prompt template for analysis CLI agent
+│   ├── agent_report.yaml       # Prompt template for report CLI agent
 │   ├── analysis_generator.yaml # Analysis Generator Prompts
 │   ├── analysis_planner.yaml   # Analysis Planning Prompts
 │   ├── evaluator.yaml          # Prompts for evaluating analysis results
 │   ├── question_manager.yaml   # Prompts for generating and prioritizing questions
-│   ├── reporter.yaml           # Prompts for generating final report
+│   ├── reporter.yaml           # Prompts for generating final report (legacy)
 │   ├── visualization_planner.yaml      # Prompts for visualization planning
 │   ├── visualization_generator.yaml    # Prompts for visualization generation
 │   └── visualization_evaluator.yaml    # Prompts for visualization evaluation
 │
 ├── analysis/
+│   ├── agent_analysis.py       # CLI agent analysis: subprocess, output reading
 │   ├── analysis_executor.py    # Securely executes generated scripts
 │   ├── analysis_generator.py   # Dynamically generates analysis scripts
 │   ├── analysis_planner.py     # Devise a plan for the next analysis
@@ -199,7 +218,8 @@ After editing, you can apply changes for the current run only or save them as pe
 │   └── visualization_generator.py      # Generates visualization code
 │
 ├── reporting/
-│   └── report_generator.py     # Creates reproducible reports with visualizations
+│   ├── agent_report.py         # CLI agent report generation: subprocess, output reading
+│   └── report_generator.py     # Creates reproducible reports with visualizations (legacy)
 │
 ├── misc/
 │   ├── title.txt               # Project title information
@@ -238,7 +258,11 @@ Both modes write all output to the `analysis/` subdirectory within the project.
 
 ### Reporting
 
+By default, the final report is generated by a CLI agent subprocess (Claude CLI or Codex CLI) that reads all analysis outputs and visualizations, then writes an academic-style research report autonomously. The agent writes `Reporter_log.md` (working notes) and `{title}.md` (the final report) to the `reports/` directory. When agent mode is unavailable, the system falls back to a legacy multi-call pipeline:
+
 - **Report Generator**: Produces comprehensive reports with findings, visualizations, and insights in multiple formats
+
+Set `reporting.use_agent: false` in `config.yaml` to always use the legacy pipeline.
 
 ### Pipeline UI & HTML Dashboard
 
