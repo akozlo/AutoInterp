@@ -89,22 +89,22 @@ def _reconstruct_analyses_from_disk(project_dir: Path) -> list[dict]:
                     attempt_dirs.append((attempt_num, item))
                 except (ValueError, IndexError):
                     continue
-        if not attempt_dirs:
-            continue
-
-        attempt_dirs.sort(key=lambda x: x[0])
-        _, highest_attempt_dir = attempt_dirs[-1]
+        if attempt_dirs:
+            attempt_dirs.sort(key=lambda x: x[0])
+            script_search_dir = attempt_dirs[-1][1]
+        else:
+            script_search_dir = analysis_dir  # Flat structure (Codex)
 
         script_path = None
-        for f in highest_attempt_dir.iterdir():
+        for f in script_search_dir.iterdir():
             if f.is_file() and f.name.startswith("analysis_") and f.suffix == ".py":
                 script_path = f
                 break
         if not script_path:
             continue
 
-        stdout_path = highest_attempt_dir / "stdout.txt"
-        stderr_path = highest_attempt_dir / "stderr.txt"
+        stdout_path = script_search_dir / "stdout.txt"
+        stderr_path = script_search_dir / "stderr.txt"
         stdout_content = stdout_path.read_text(encoding="utf-8") if stdout_path.exists() else ""
         stderr_content = stderr_path.read_text(encoding="utf-8") if stderr_path.exists() else ""
 

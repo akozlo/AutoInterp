@@ -1712,7 +1712,7 @@ Read the notebook, identify the cause of the error, fix it, and save the correct
             else:
                 analysis_num = self._extract_analysis_number_from_step(step)
                 if analysis_num is not None:
-                    script_paths.append(f"analysis_scripts/analysis_{analysis_num}/ (highest attempt_* subdir contains the final script)")
+                    script_paths.append(f"analysis_scripts/analysis_{analysis_num}/ (contains analysis_*.py and stdout.txt)")
 
         # Parse question
         raw_text = question.get("text", str(question)) if isinstance(question, dict) else str(question)
@@ -1851,14 +1851,16 @@ Read the notebook, identify the cause of the error, fix it, and save the correct
 
     def _resolve_final_script_from_disk(self, analysis_num: int) -> str:
         """
-        Resolve the final (highest) attempt script from the analysis_scripts directory.
-        Uses analysis_{n}/attempt_{m}/analysis_*.py - takes highest attempt number.
+        Resolve the final script from the analysis_scripts directory.
+        Supports both: analysis_{n}/analysis_*.py (Codex flat) and
+        analysis_{n}/attempt_{m}/analysis_*.py (sequential, highest attempt).
         """
         try:
             analysis_scripts_dir = self.path_resolver.get_path("analysis_scripts")
             analysis_dir = analysis_scripts_dir / f"analysis_{analysis_num}"
             if not analysis_dir.exists():
                 return ""
+            script_search_dir = None
             attempt_dirs = []
             for item in analysis_dir.iterdir():
                 if item.is_dir() and item.name.startswith("attempt_"):
@@ -1867,12 +1869,12 @@ Read the notebook, identify the cause of the error, fix it, and save the correct
                         attempt_dirs.append((attempt_num, item))
                     except (ValueError, IndexError):
                         continue
-            if not attempt_dirs:
-                return ""
-            attempt_dirs.sort(key=lambda x: x[0])
-            highest_attempt_dir = attempt_dirs[-1][1]
-            # Find analysis_*.py (executed script) - not analysis_generator_*.txt
-            for f in highest_attempt_dir.iterdir():
+            if attempt_dirs:
+                attempt_dirs.sort(key=lambda x: x[0])
+                script_search_dir = attempt_dirs[-1][1]
+            else:
+                script_search_dir = analysis_dir  # Flat structure (Codex)
+            for f in script_search_dir.iterdir():
                 if f.is_file() and f.name.startswith("analysis_") and f.suffix == ".py":
                     with open(f, "r", encoding="utf-8") as fp:
                         return fp.read()

@@ -32,6 +32,7 @@ model:
 
 # Analysis settings
 analysis:
+  mode: "codex"  # "codex" = Codex-based agentic analysis; "sequential" = legacy planner->generator->executor->evaluator
   execution:
     timeout: 180  # seconds
     max_memory: 4000  # MB
@@ -81,10 +82,12 @@ resources:
   batch_size: 8
   precision: "fp16"  # Options: fp32, fp16, bf16
 
-# Codex CLI settings (for notebook generation)
+# Codex CLI settings (for notebook generation and analysis)
 codex:
   timeout: 1800  # Seconds per Codex invocation (30 min; complex notebooks may need longer)
   sandbox: "workspace-write"  # Restricted to project dir; validation runs externally in a loop
+  analysis_timeout: 1800  # Per-analysis Codex timeout when analysis.mode is "codex"
+  analysis_sandbox: "workspace-write"  # Sandbox for Codex analysis runs
   max_validation_retries: 1  # Fix attempts when validation fails (1 = quick, 3 = thorough)
   validation_timeout: 600  # Seconds for nbconvert to run the notebook (ML notebooks need more)
 

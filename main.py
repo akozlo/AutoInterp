@@ -10,6 +10,7 @@ import re
 import argparse
 import asyncio
 import json
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple, Union
 
@@ -28,11 +29,13 @@ except ImportError:
 
 from AutoInterp.core.utils import setup_logging, load_yaml, ensure_directory, get_timestamp, load_prompts, PathResolver, log_to_comprehensive_log, clean_code_content
 from AutoInterp.core.llm_interface import LLMInterface
+from AutoInterp.core.codex_runner import run_codex_exec
 from AutoInterp.questions.question_manager import QuestionManager
 from AutoInterp.analysis.analysis_generator import AnalysisGenerator
 from AutoInterp.analysis.analysis_executor import AnalysisExecutor
 from AutoInterp.analysis.analysis_planner import AnalysisPlanner
 from AutoInterp.analysis.evaluator import Evaluator
+from AutoInterp.analysis.codex_analysis import build_codex_analysis_prompt, parse_codex_analysis_output
 from AutoInterp.analysis.visualization_evaluator import VisualizationEvaluator
 from AutoInterp.reporting.report_generator import ReportGenerator
 
@@ -831,6 +834,93 @@ async def analyze_question(
         # Re-raise the exception for the caller to handle
         raise e
 
+
+async def analyze_question_via_codex(
+    active_question: Union[str, Dict[str, Any]],
+    config: Dict[str, Any],
+    logger: Any,
+    iteration_number: int,
+    previous_interpretations: List[str],
+) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    """
+    Perform a single analysis via Codex. Codex designs the analysis, iterates on the
+    script until it runs successfully, and writes a structured interpretation.
+
+    Args:
+        active_question: The question to analyze (raw text or dict)
+        config: Configuration dictionary
+        logger: Logging instance
+        iteration_number: 1-based analysis iteration number
+        previous_interpretations: Raw evaluation text from prior Codex analyses
+
+    Returns:
+        Tuple of (analysis_result, evaluation_result, analysis_plan)
+    """
+    path_resolver = PathResolver()
+    project_dir = path_resolver.get_project_dir().resolve()
+
+    question_text = active_question
+    if isinstance(active_question, dict):
+        question_text = active_question.get("raw_text", active_question.get("statement", str(active_question)))
+    if not question_text or not isinstance(question_text, str):
+        prioritized_path = path_resolver.get_prioritized_question_path()
+        if prioritized_path.exists():
+            question_text = prioritized_path.read_text(encoding="utf-8")
+        else:
+            question_text = str(active_question)
+
+    logger.info("Starting Codex-based analysis...")
+    print(f"[AUTOINTERP] PHASE 3/4: Analysis of Question (Codex mode)")
+    print(f"[AUTOINTERP] Invoking Codex for analysis #{iteration_number}...")
+
+    prompt = build_codex_analysis_prompt(
+        question=question_text,
+        iteration_number=iteration_number,
+        previous_interpretations=previous_interpretations,
+        config=config,
+        path_resolver=path_resolver,
+    )
+
+    codex_config = config.get("codex", {})
+    timeout = codex_config.get("analysis_timeout", codex_config.get("timeout", 1800))
+    sandbox = codex_config.get("analysis_sandbox", codex_config.get("sandbox", "workspace-write"))
+
+    try:
+        result = await asyncio.to_thread(
+            run_codex_exec,
+            prompt=prompt,
+            cwd=project_dir,
+            sandbox=sandbox,
+            timeout=timeout,
+            stream_output=True,
+        )
+    except subprocess.TimeoutExpired as e:
+        logger.error(f"Codex analysis timed out after {timeout}s")
+        print(f"[AUTOINTERP] Codex analysis timed out after {timeout}s")
+        raise ValueError(f"Codex analysis timed out: {e}") from e
+
+    if result.returncode != 0:
+        err_msg = result.stderr or result.stdout or "unknown error"
+        logger.warning(f"Codex exited with code {result.returncode}: {err_msg[:500]}")
+        print(f"[AUTOINTERP] Codex exited with code {result.returncode}")
+        raise ValueError(f"Codex analysis failed: {err_msg}")
+
+    analysis_result, evaluation_result = parse_codex_analysis_output(
+        project_dir=project_dir,
+        iteration_number=iteration_number,
+    )
+
+    if not analysis_result.get("success", False):
+        raise ValueError(analysis_result.get("error", "Codex did not produce valid analysis output"))
+
+    analysis_plan = evaluation_result.get("raw_evaluation", "")
+
+    logger.info("Codex analysis completed successfully")
+    print(f"[AUTOINTERP] Codex analysis #{iteration_number} completed successfully")
+
+    return analysis_result, evaluation_result, analysis_plan
+
+
 async def evaluate_analysis(
     active_question: Union[str, Dict[str, Any]],  # Can be raw text or dict
     analysis_results: Dict[str, Any],
@@ -945,6 +1035,11 @@ async def iterative_analysis(
     logger.info(f"Starting iterative analysis cycle. Max iterations: {max_iterations}, Confidence threshold: {confidence_threshold}")
     print(f"[AUTOINTERP] Beginning iterative analysis cycle")
     print(f"[AUTOINTERP] Will continue analyzing until confidence is ≥ {confidence_threshold}, or until {max_iterations} analyses are completed")
+
+    analysis_mode = config.get("analysis", {}).get("mode", "sequential")
+    use_codex = analysis_mode == "codex"
+    if use_codex:
+        print(f"[AUTOINTERP] Using Codex-based analysis mode")
     
     all_analyses = []
     all_evaluations = []
@@ -958,166 +1053,182 @@ async def iterative_analysis(
         
         # Make sure we start a new analysis for this iteration (not a retry attempt)
         # but only if this isn't the first iteration
-        if iteration > 0:
+        if iteration > 0 and not use_codex:
             # Reset the analysis generator to start a new analysis
             analysis_generator.move_to_next_analysis()
         
         # Run analysis
         try:
-            analysis_result, analysis_plan = await analyze_question(
-                active_question=active_question,
-                analysis_generator=analysis_generator,
-                analysis_executor=analysis_executor,
-                analysis_planner=analysis_planner,
-                question_manager=question_manager,
-                config=config,
-                logger=logger,
-                iteration_number=iteration + 1
-            )
-            all_analyses.append(analysis_result)
+            if use_codex:
+                previous_interpretations = [
+                    e.get("raw_evaluation", "") for e in all_evaluations
+                    if e.get("raw_evaluation")
+                ]
+                analysis_result, evaluation_result, analysis_plan = await analyze_question_via_codex(
+                    active_question=active_question,
+                    config=config,
+                    logger=logger,
+                    iteration_number=iteration + 1,
+                    previous_interpretations=previous_interpretations,
+                )
+                all_analyses.append(analysis_result)
+                all_evaluations.append(evaluation_result)
+                # Skip the sequential flow and ANALYSIS_FAILED retry (Codex handles iteration internally)
+            else:
+                analysis_result, analysis_plan = await analyze_question(
+                    active_question=active_question,
+                    analysis_generator=analysis_generator,
+                    analysis_executor=analysis_executor,
+                    analysis_planner=analysis_planner,
+                    question_manager=question_manager,
+                    config=config,
+                    logger=logger,
+                    iteration_number=iteration + 1
+                )
+                all_analyses.append(analysis_result)
             
-            # Evaluate results
-            evaluation_result = await evaluate_analysis(
-                active_question=active_question,
-                analysis_results=analysis_result,
-                evaluator=evaluator,
-                question_manager=question_manager,
-                config=config,
-                logger=logger,
-                current_confidence=current_confidence,
-                iteration_number=iteration + 1,
-                attempt_number=analysis_generator.current_attempt,
-                analysis_plan=analysis_plan
-            )
+                # Evaluate results
+                evaluation_result = await evaluate_analysis(
+                    active_question=active_question,
+                    analysis_results=analysis_result,
+                    evaluator=evaluator,
+                    question_manager=question_manager,
+                    config=config,
+                    logger=logger,
+                    current_confidence=current_confidence,
+                    iteration_number=iteration + 1,
+                    attempt_number=analysis_generator.current_attempt,
+                    analysis_plan=analysis_plan
+                )
             
-            # Check if evaluator detected failed analysis (similar to compilation failure handling)
-            raw_evaluation = evaluation_result.get("raw_evaluation", "")
-            if "ANALYSIS_FAILED" in raw_evaluation:
-                logger.warning(f"Evaluator detected failed analysis in iteration {iteration+1}")
-                print(f"[AUTOINTERP] Evaluator detected problematic analysis results")
-                
-                # Extract the reason for failure from the evaluation
-                failure_reason = "Analysis produced uninformative or erroneous results"
-                
-                # Try to extract more specific failure reason from the evaluation
+                # Check if evaluator detected failed analysis (similar to compilation failure handling)
+                raw_evaluation = evaluation_result.get("raw_evaluation", "")
                 if "ANALYSIS_FAILED" in raw_evaluation:
-                    # Look for text after ANALYSIS_FAILED to get the reason
-                    import re
-                    failure_match = re.search(r'ANALYSIS_FAILED[:\s]*(.+?)(?:\n|$)', raw_evaluation, re.IGNORECASE)
-                    if failure_match:
-                        failure_reason = failure_match.group(1).strip()
+                    logger.warning(f"Evaluator detected failed analysis in iteration {iteration+1}")
+                    print(f"[AUTOINTERP] Evaluator detected problematic analysis results")
                 
-                # Retry with both execution output and evaluator feedback
-                max_retries = config.get("execution", {}).get("max_retries", 1)
-                max_total_attempts = max_retries + 1
-                attempt_number = 1
+                    # Extract the reason for failure from the evaluation
+                    failure_reason = "Analysis produced uninformative or erroneous results"
                 
-                analysis_failed_handled = False
-                while attempt_number <= max_total_attempts and not analysis_failed_handled:
-                    logger.info(f"Retrying analysis due to ANALYSIS_FAILED (attempt {attempt_number}/{max_total_attempts})")
-                    print(f"[AUTOINTERP] Retrying analysis (attempt {attempt_number}/{max_total_attempts})...")
+                    # Try to extract more specific failure reason from the evaluation
+                    if "ANALYSIS_FAILED" in raw_evaluation:
+                        # Look for text after ANALYSIS_FAILED to get the reason
+                        import re
+                        failure_match = re.search(r'ANALYSIS_FAILED[:\s]*(.+?)(?:\n|$)', raw_evaluation, re.IGNORECASE)
+                        if failure_match:
+                            failure_reason = failure_match.group(1).strip()
+                
+                    # Retry with both execution output and evaluator feedback
+                    max_retries = config.get("execution", {}).get("max_retries", 1)
+                    max_total_attempts = max_retries + 1
+                    attempt_number = 1
+                
+                    analysis_failed_handled = False
+                    while attempt_number <= max_total_attempts and not analysis_failed_handled:
+                        logger.info(f"Retrying analysis due to ANALYSIS_FAILED (attempt {attempt_number}/{max_total_attempts})")
+                        print(f"[AUTOINTERP] Retrying analysis (attempt {attempt_number}/{max_total_attempts})...")
                     
-                    # Increment the attempt counter in the analysis generator
-                    analysis_generator.increment_attempt()
+                        # Increment the attempt counter in the analysis generator
+                        analysis_generator.increment_attempt()
                     
-                    # Create comprehensive error context with both execution and evaluation info
-                    comprehensive_error_context = {
-                        "error": failure_reason,
-                        "traceback": f"EVALUATOR FEEDBACK:\n{raw_evaluation}\n\nEXECUTION OUTPUT:\n{analysis_result.get('stdout', '')}",
-                        "previous_script": analysis_result.get("script_path", ""),
-                        "analysis_failed": True  # Flag to indicate this is an ANALYSIS_FAILED retry
-                    }
+                        # Create comprehensive error context with both execution and evaluation info
+                        comprehensive_error_context = {
+                            "error": failure_reason,
+                            "traceback": f"EVALUATOR FEEDBACK:\n{raw_evaluation}\n\nEXECUTION OUTPUT:\n{analysis_result.get('stdout', '')}",
+                            "previous_script": analysis_result.get("script_path", ""),
+                            "analysis_failed": True  # Flag to indicate this is an ANALYSIS_FAILED retry
+                        }
                     
-                    # Generate a new analysis script with both execution results and evaluator feedback
-                    new_script_path, new_analysis_code = await analysis_generator.generate_analysis(
-                        question=active_question,
-                        task_config=config,
-                        error_context=comprehensive_error_context,
-                        iteration_number=iteration + 1
-                    )
-                    
-                    logger.info(f"Generated new analysis script at {new_script_path}")
-                    print(f"[AUTOINTERP] Generated new analysis script at {new_script_path}")
-                    
-                    # Execute the new analysis
-                    new_analysis_result = await analysis_executor.execute_analysis(
-                        script_path=new_script_path,
-                        question=active_question,
-                        parameters=config.get("analysis_parameters", {})
-                    )
-                    
-                    if not new_analysis_result.get("success", False):
-                        # New script failed to execute, use normal compilation error handling
-                        error_msg = new_analysis_result.get("error", "Unknown error")
-                        logger.error(f"Retry analysis execution failed (attempt {attempt_number}/{max_total_attempts}): {error_msg}")
-                        print(f"[AUTOINTERP] Retry analysis execution failed (attempt {attempt_number}/{max_total_attempts}): {error_msg}")
-                        
-                        if attempt_number < max_total_attempts:
-                            attempt_number += 1
-                            continue
-                        else:
-                            # Exhausted retries, check configuration for behavior
-                            fail_on_max_retries = config.get("execution", {}).get("fail_on_max_retries", False)
-                            
-                            if fail_on_max_retries:
-                                # Shutdown the entire system
-                                logger.critical(f"System shutdown due to max retries exceeded in ANALYSIS_FAILED retry loop")
-                                print(f"[AUTOINTERP] SYSTEM SHUTDOWN: All retry attempts failed (fail_on_max_retries=true)")
-                                raise SystemExit("All retry attempts failed, shutting down system")
-                            else:
-                                # Continue with original failed analysis (existing behavior)
-                                logger.error(f"All retry attempts failed, continuing with original analysis")
-                                print(f"[AUTOINTERP] All retry attempts failed, continuing with original analysis")
-                                break
-                    else:
-                        # New analysis succeeded, evaluate it
-                        new_evaluation_result = await evaluate_analysis(
-                            active_question=active_question,
-                            analysis_results=new_analysis_result,
-                            evaluator=evaluator,
-                            question_manager=question_manager,
-                            config=config,
-                            logger=logger,
-                            current_confidence=current_confidence,
-                            iteration_number=iteration + 1,
-                            attempt_number=analysis_generator.current_attempt,
-                            analysis_plan=analysis_plan
+                        # Generate a new analysis script with both execution results and evaluator feedback
+                        new_script_path, new_analysis_code = await analysis_generator.generate_analysis(
+                            question=active_question,
+                            task_config=config,
+                            error_context=comprehensive_error_context,
+                            iteration_number=iteration + 1
                         )
+                    
+                        logger.info(f"Generated new analysis script at {new_script_path}")
+                        print(f"[AUTOINTERP] Generated new analysis script at {new_script_path}")
+                    
+                        # Execute the new analysis
+                        new_analysis_result = await analysis_executor.execute_analysis(
+                            script_path=new_script_path,
+                            question=active_question,
+                            parameters=config.get("analysis_parameters", {})
+                        )
+                    
+                        if not new_analysis_result.get("success", False):
+                            # New script failed to execute, use normal compilation error handling
+                            error_msg = new_analysis_result.get("error", "Unknown error")
+                            logger.error(f"Retry analysis execution failed (attempt {attempt_number}/{max_total_attempts}): {error_msg}")
+                            print(f"[AUTOINTERP] Retry analysis execution failed (attempt {attempt_number}/{max_total_attempts}): {error_msg}")
                         
-                        # Check if the new analysis still failed
-                        new_raw_evaluation = new_evaluation_result.get("raw_evaluation", "")
-                        if "ANALYSIS_FAILED" in new_raw_evaluation:
-                            logger.warning(f"Retry analysis still failed evaluation (attempt {attempt_number}/{max_total_attempts})")
-                            print(f"[AUTOINTERP] Retry analysis still produced problematic results (attempt {attempt_number}/{max_total_attempts})")
-                            
                             if attempt_number < max_total_attempts:
                                 attempt_number += 1
                                 continue
                             else:
-                                # Use the new results even though they failed evaluation
-                                logger.info(f"Using final retry results despite evaluation failure")
-                                print(f"[AUTOINTERP] Using final retry results despite evaluation concerns")
+                                # Exhausted retries, check configuration for behavior
+                                fail_on_max_retries = config.get("execution", {}).get("fail_on_max_retries", False)
+                            
+                                if fail_on_max_retries:
+                                    # Shutdown the entire system
+                                    logger.critical(f"System shutdown due to max retries exceeded in ANALYSIS_FAILED retry loop")
+                                    print(f"[AUTOINTERP] SYSTEM SHUTDOWN: All retry attempts failed (fail_on_max_retries=true)")
+                                    raise SystemExit("All retry attempts failed, shutting down system")
+                                else:
+                                    # Continue with original failed analysis (existing behavior)
+                                    logger.error(f"All retry attempts failed, continuing with original analysis")
+                                    print(f"[AUTOINTERP] All retry attempts failed, continuing with original analysis")
+                                    break
+                        else:
+                            # New analysis succeeded, evaluate it
+                            new_evaluation_result = await evaluate_analysis(
+                                active_question=active_question,
+                                analysis_results=new_analysis_result,
+                                evaluator=evaluator,
+                                question_manager=question_manager,
+                                config=config,
+                                logger=logger,
+                                current_confidence=current_confidence,
+                                iteration_number=iteration + 1,
+                                attempt_number=analysis_generator.current_attempt,
+                                analysis_plan=analysis_plan
+                            )
+                        
+                            # Check if the new analysis still failed
+                            new_raw_evaluation = new_evaluation_result.get("raw_evaluation", "")
+                            if "ANALYSIS_FAILED" in new_raw_evaluation:
+                                logger.warning(f"Retry analysis still failed evaluation (attempt {attempt_number}/{max_total_attempts})")
+                                print(f"[AUTOINTERP] Retry analysis still produced problematic results (attempt {attempt_number}/{max_total_attempts})")
+                            
+                                if attempt_number < max_total_attempts:
+                                    attempt_number += 1
+                                    continue
+                                else:
+                                    # Use the new results even though they failed evaluation
+                                    logger.info(f"Using final retry results despite evaluation failure")
+                                    print(f"[AUTOINTERP] Using final retry results despite evaluation concerns")
+                                    analysis_result = new_analysis_result
+                                    evaluation_result = new_evaluation_result
+                                    # Mark that this evaluation should not trigger early termination
+                                    evaluation_result["skip_confidence_check"] = True
+                                    analysis_failed_handled = True
+                            else:
+                                # New analysis passed evaluation
+                                logger.info(f"Retry analysis succeeded after {attempt_number} attempts")
+                                print(f"[AUTOINTERP] Retry analysis succeeded after {attempt_number} attempts")
                                 analysis_result = new_analysis_result
                                 evaluation_result = new_evaluation_result
-                                # Mark that this evaluation should not trigger early termination
-                                evaluation_result["skip_confidence_check"] = True
                                 analysis_failed_handled = True
-                        else:
-                            # New analysis passed evaluation
-                            logger.info(f"Retry analysis succeeded after {attempt_number} attempts")
-                            print(f"[AUTOINTERP] Retry analysis succeeded after {attempt_number} attempts")
-                            analysis_result = new_analysis_result
-                            evaluation_result = new_evaluation_result
-                            analysis_failed_handled = True
-                            break
+                                break
                 
-                # Update the analysis result in the list
-                if all_analyses:
-                    all_analyses[-1] = analysis_result
-                else:
-                    all_analyses.append(analysis_result)
+                    # Update the analysis result in the list
+                    if all_analyses:
+                        all_analyses[-1] = analysis_result
+                    else:
+                        all_analyses.append(analysis_result)
             
-            all_evaluations.append(evaluation_result)
+                all_evaluations.append(evaluation_result)
             
             # Log successful analysis and evaluation to comprehensive log
             # Only log if the evaluation doesn't contain ANALYSIS_FAILED
@@ -1252,49 +1363,56 @@ def find_successful_analyses(path_resolver: PathResolver) -> List[Tuple[str, str
     
     logger.info(f"Found {len(analysis_dirs)} analysis directories")
     
-    # For each analysis directory, find the highest attempt
+    # For each analysis directory, find script and output (supports flat Codex and legacy attempt_* structure)
     for analysis_num, analysis_dir in analysis_dirs:
         logger.info(f"Processing analysis_{analysis_num}")
-        
-        # Find all attempt_N directories within this analysis
+
+        # Determine search dir: flat (Codex) or highest attempt_* (sequential)
+        script_search_dir = None
         attempt_dirs = []
         for item in analysis_dir.iterdir():
             if item.is_dir() and item.name.startswith("attempt_"):
                 try:
-                    # Extract the attempt number
                     attempt_num = int(item.name.split("_")[1])
                     attempt_dirs.append((attempt_num, item))
                 except (ValueError, IndexError):
-                    logger.warning(f"Skipping malformed attempt directory: {item.name}")
                     continue
-        
-        if not attempt_dirs:
-            logger.warning(f"No attempt directories found in {analysis_dir}")
-            continue
-            
-        # Sort by attempt number and get the highest one
-        attempt_dirs.sort(key=lambda x: x[0])
-        highest_attempt_num, highest_attempt_dir = attempt_dirs[-1]
-        
-        logger.info(f"Using highest attempt: attempt_{highest_attempt_num} for analysis_{analysis_num}")
-        
-        # Look for the required files in the highest attempt directory
+        if attempt_dirs:
+            attempt_dirs.sort(key=lambda x: x[0])
+            script_search_dir = attempt_dirs[-1][1]
+            logger.info(f"Using attempt dir: {script_search_dir.name} for analysis_{analysis_num}")
+        else:
+            # Flat structure (Codex): script and stdout directly in analysis_dir
+            script_search_dir = analysis_dir
+            logger.info(f"Using flat structure for analysis_{analysis_num}")
+
         analysis_script_content = None
         analysis_output_content = None
-        
-        # Find analysis_generator_*.txt file
-        for file_path in highest_attempt_dir.iterdir():
-            if file_path.is_file() and file_path.name.startswith("analysis_generator_") and file_path.suffix == ".txt":
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        analysis_script_content = f.read()
-                    logger.info(f"Found analysis script file: {file_path.name}")
-                    break
-                except Exception as e:
-                    logger.warning(f"Error reading analysis script file {file_path}: {e}")
-        
+
+        # Find script: prefer analysis_*.py (executed script), fallback to analysis_generator_*.txt
+        for file_path in script_search_dir.iterdir():
+            if file_path.is_file():
+                if file_path.name.startswith("analysis_") and file_path.suffix == ".py":
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            analysis_script_content = f.read()
+                        logger.info(f"Found analysis script: {file_path.name}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Error reading script {file_path}: {e}")
+        if not analysis_script_content:
+            for file_path in script_search_dir.iterdir():
+                if file_path.is_file() and file_path.name.startswith("analysis_generator_") and file_path.suffix == ".txt":
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            analysis_script_content = f.read()
+                        logger.info(f"Found analysis generator file: {file_path.name}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Error reading {file_path}: {e}")
+
         # Find stdout.txt file
-        stdout_file = highest_attempt_dir / "stdout.txt"
+        stdout_file = script_search_dir / "stdout.txt"
         if stdout_file.exists():
             try:
                 with open(stdout_file, 'r', encoding='utf-8') as f:
@@ -1303,7 +1421,7 @@ def find_successful_analyses(path_resolver: PathResolver) -> List[Tuple[str, str
             except Exception as e:
                 logger.warning(f"Error reading stdout.txt: {e}")
         else:
-            logger.warning(f"stdout.txt not found in {highest_attempt_dir}")
+            logger.warning(f"stdout.txt not found in {script_search_dir}")
         
         # Only add if we found both required files
         if analysis_script_content and analysis_output_content:
