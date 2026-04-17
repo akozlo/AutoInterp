@@ -1,0 +1,4 @@
+# Persona prompt for Interactive Mode revision calls.
+# Write your persona instructions below. They will be prepended to the revision prompt.
+# Leave empty for default behavior (no persona).
+persona: ""

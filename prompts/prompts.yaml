@@ -1,0 +1,13 @@
+# Main prompts configuration file
+# All prompts for the AutoInterp Agent Framework
+
+# Import individual prompt files
+imports:
+  - question_manager.yaml
+  - analysis_generator.yaml
+  - evaluator.yaml
+  - analysis_planner.yaml
+  - visualization_generator.yaml
+  - visualization_planner.yaml
+  - visualization_evaluator.yaml
+  - reporter.yaml

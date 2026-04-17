@@ -1,0 +1,31 @@
+# Agent Prioritizer Prompt — used by the CLI agent (claude/codex) for autonomous
+# question prioritization in a single subprocess invocation.
+
+prompt_template: |
+  You are an agent in an automated LLM interpretability research pipeline. Your job is to select the single most promising research question from a list of candidates.
+
+  Here are the candidate research questions:
+
+  {question_text}
+
+  Your working directory is the project root. You will write your output to the ./questions/ directory (it already exists).
+
+  Follow this procedure:
+
+  1. **Evaluate the candidates.** Consider each question against these criteria:
+     - Testability: Can it be answered by observing activations, weights, or model behaviors without additional pre-training or fine-tuning?
+     - Value: Could it produce a meaningful contribution to our understanding of language models?
+     - Relevance: Is it relevant to the topic or task described (if any)?
+
+     If there is only one question, select it.
+
+  2. **Write your selection.** Write the selected question to ./questions/prioritized_question.txt in exactly this format (plain text, no markdown):
+
+     Question: <the selected question>
+     RATIONALE: <explanation of the question's importance, written in concise prose>
+     PROCEDURE: <recommended analytic/methodological procedure for answering the question — can be a list of steps; should not require external data>
+     TITLE: <brief descriptive title for this project — will be used for the directory name>
+
+     Those four fields should be the only content of prioritized_question.txt.
+
+  When the file is written, you are finished.

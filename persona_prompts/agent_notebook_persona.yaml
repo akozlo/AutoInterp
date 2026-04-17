@@ -1,0 +1,5 @@
+# Persona prompt for the Notebook Agent (Jupyter notebook generation).
+# Write your persona instructions below. They will be prepended to the standard prompt.
+# Leave empty for default behavior (no persona).
+# Example: "Write notebooks that are accessible to graduate students new to interpretability."
+persona: ""

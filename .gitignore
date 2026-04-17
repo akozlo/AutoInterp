@@ -1,0 +1,54 @@
+# Environment and secrets
+.env
+
+# Generated outputs
+projects/
+test_runs/
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+
+# HuggingFace model cache
+hf_models/
+
+# Semantic Scholar API response cache
+citation_graph/.cache/
+
+# Package metadata
+*.egg-info/
+
+# Logs
+*.log
+logs/
+
+# IDE configs
+.claude/
+.idea/
+.vscode/
+
+# Runtime state
+.user_options.json
+.user_manual_models.json
+.last_llm.json
+
+# Persona prompts (user-customized; empty templates committed for reference)
+# persona_prompts/  — `_persona.yaml` templates are tracked; use skip-worktree to ignore local edits
+
+
+# Local SLURM/sbatch scripts
+sbatch/
+
+# Full CLAUDE.md reference (verbose version)
+claude_reference.md
+# Local config overrides (personal settings, never committed)
+config.local.yaml
+
+# Personal reference notes
+sandbox_reference.md

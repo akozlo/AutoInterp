@@ -1,0 +1,81 @@
+# Agent Notebook Prompt — used by the CLI agent (claude/codex) to create
+# a self-contained, executable Jupyter notebook from the finalized repo.
+#
+# Placeholders substituted by Python:
+#   {repo_listing}    — directory tree of repo/
+#   {report_excerpt}  — first ~200 lines of the most current report
+
+prompt_template: |
+  You are an agent in an automated LLM interpretability research system. The study is complete and all finalized files are in the current directory (this is the repo/ directory). Your job is to create a single self-contained, executable Jupyter notebook that tells the complete research story as an interactive tutorial.
+
+  ## Repo contents
+
+  The current directory contains:
+  ```
+  {repo_listing}
+  ```
+
+  ## Report excerpt (for context)
+
+  ```
+  {report_excerpt}
+  ```
+
+  ## Your task
+
+  Create a Jupyter notebook at `notebooks/<descriptive_name>.ipynb` that a reader can run end-to-end to reproduce the study's analyses and visualizations.
+
+  ### Structure
+
+  1. **Title + Abstract cell** (markdown) — title and a brief abstract drawn from the report
+  2. **How to Run cell** (markdown) — explain how to run this notebook:
+     - `pip install -r requirements.txt` or equivalent from the scripts' imports
+     - Any environment variables or data files needed
+     - Expected runtime estimate
+  3. **Environment setup cell** (code) — `pip install` commands (use `%pip install` for notebook compatibility) and all imports gathered from the analysis scripts. Group into one cell.
+  4. **For each analysis script** in `scripts/`:
+     - A **markdown explanation cell** — "What this does" and "Why" (drawn from the report's description of this analysis)
+     - One or more **code cells** with the adapted analysis code. In the great majority of cases,  this should be broken down into parts so the user can really see the steps of analysis, rather than a long .py ported into a single code block. Use annotation in scripts and markdown between blocks to make the notebook pedagogical and clear to follow.
+     - A **results/discussion cell** (markdown) if appropriate, summarizing what the output shows
+  5. **Visualization cells** — for each figure, add the scripts to generate these figures. It should not simply port in the .png files, it should regenerate the figures.
+     - **For each visualization** paper/, port the scripts from .py files into the notebook. 
+  6. **Conclusion cell** (markdown) — key findings from the report
+
+  ### Code adaptation rules
+
+  When converting scripts to notebook cells, apply these transformations:
+
+  - **Remove `plt.savefig()`** and `fig.write_image()` calls — replace with `plt.show()` or just let the figure display inline
+  - **Remove file write operations** that save intermediate results to disk, unless the data is needed by a later cell — in that case keep the variable in memory and remove the file write
+  - **Add `plt.show()`** after any matplotlib figure creation
+  - **Remove `if __name__ == "__main__"` guards** — flatten the code so it runs directly in the cell
+  - **Keep variables in memory across cells** — if script A computes a result that script B loads from a file, instead have the notebook keep the variable from cell A and use it directly in cell B's code (remove the file read)
+  - **Remove print statements** that say "saved to file" or similar I/O status messages
+  - **Adapt file paths** — if a script reads data from `../data/` or `data/`, update paths relative to the notebook's location (`notebooks/`). Use `../data/`, `../scripts/`, etc. as needed.
+  - **Handle imports** — collect all imports into the environment setup cell at the top, but also keep imports in individual cells if they help readability
+  - For plotly figures, use `fig.show()` instead of `fig.write_html()`
+
+  ### Validation
+
+  After creating the notebook:
+
+  1. Run the notebook to verify it executes without errors:
+     ```bash
+     cd notebooks && jupyter execute <notebook_name>.ipynb
+     ```
+     or:
+     ```bash
+     cd notebooks && python -m nbconvert --to notebook --execute <notebook_name>.ipynb
+     ```
+  2. If any cells fail, read the error, fix the code, and re-run
+  3. The notebook should execute cleanly end-to-end
+
+  ### Important notes
+  
+  - Read the report in `paper/` to understand the narrative and how analyses connect
+  - Read ALL scripts in `scripts/` to understand what they do before creating the notebook
+  - The notebook should be self-contained: a reader with the right packages installed should be able to run it from top to bottom.
+  - Use clear, pedagogical markdown cells that explain the "what" and "why" of each analysis step. Break down the analyses into multiple steps to make it clearer to understand and follow.
+  - If a script downloads data or models at runtime, keep that behavior but note it in the "How to Run" cell
+
+  When the notebook is complete and executes successfully, you are done. Great job!

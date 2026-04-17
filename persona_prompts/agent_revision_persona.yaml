@@ -1,0 +1,4 @@
+# Persona prompt for the Revision Agent (per-recommendation revisions).
+# Write your persona instructions below. They will be prepended to the standard prompt.
+# Leave empty for default behavior (no persona).
+persona: ""

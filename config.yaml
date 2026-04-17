@@ -1,0 +1,285 @@
+# Global configuration for the AutoInterp Agent Framework
+
+# Provider-specific configurations
+providers:
+  anthropic:
+    api_version: "2023-06-01"
+  openai:
+    api_version: "2020-10-01"  # Current REST API version
+    organization_id: null       # Must be set via env var OPENAI_ORGANIZATION_ID
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+
+# Codex CLI settings
+codex:
+  sandbox_bypass: false   # Set true for Docker/containers/SLURM (bypasses bwrap sandbox)
+
+# Interactive mode — pause after each pipeline stage for user review and feedback
+interactive_mode: false
+
+# Framework settings
+framework:
+  name: "AutoInterp Agent Framework"
+  version: "0.1.0"
+  log_level: "INFO"
+  log_file: "autointerp.log"
+  log_message_limit: 500  # Maximum length for log messages
+  execute_full_workflow: true  # Whether to run the complete workflow automatically
+
+# Task configuration
+task:
+  description: ""  # Task description will be provided by user or auto-generated
+
+literature_search:
+  enabled: true
+  n_papers: 3   # number of papers to sample from graph for question generation
+  graph: null   # null = use citation_graph/output/graph_state.json
+  seed_id: null
+  seed: null   # null = different papers each run; set e.g. 42 for reproducibility
+  use_agent: true       # use CLI agent (claude/codex) for question generation; false = LLM API call
+  agent_timeout: 4200   # seconds to wait for agent CLI subprocess
+
+# Question generation + prioritization settings
+questions:
+  use_agent: true       # Use CLI agent (claude/codex) for question gen+prioritize; false = API calls
+                        # Applies to both question generation and standalone prioritization
+  agent_timeout: 4200   # Subprocess timeout in seconds (shared by gen and prioritize agents)
+
+# Literature review settings — arXiv-based literature review after question prioritization
+literature_review:
+  enabled: true               # Run literature review after question prioritization
+  use_agent: true             # Use CLI agent (claude/codex) for literature review
+  agent_timeout: 4200         # Subprocess timeout in seconds for literature review agent
+  lit_count: 10                # Target number of papers to find and summarize
+
+# Model to analyze
+model:
+  name: "meta-llama/Meta-Llama-3-8B-Instruct"  # HuggingFace model ID (instruct/chat variant)
+  base_model: "meta-llama/Meta-Llama-3-8B"     # Base (pretrained) variant — use for probing, activations, representations
+  tokenizer: "meta-llama/Meta-Llama-3-8B-Instruct"
+  vision_model: "Qwen/Qwen3.5-2B"           # For tasks requiring vision
+  reasoning_model: "Qwen/Qwen3.5-2B"        # For tasks requiring reasoning
+  cache_dir: "hf_models"  # Local cache directory
+
+
+# Analysis settings
+analysis:
+  use_agent: true            # Use CLI agent (claude/codex) for analysis; false = legacy pipeline
+  agent_timeout: 4200        # Per-iteration timeout in seconds for agent subprocess
+  execution:
+    timeout: 3600  # seconds
+    max_memory: 12000  # MB
+    sandbox: true
+  executor_type: "sandbox"
+  output_format: "json"
+  timeout_per_analysis: 3600
+  max_iterations: 6      # Maximum number of analysis cycles per question
+  confidence_threshold: 0.85  # Continue analysis if confidence_threshold > confidence
+
+# Execution settings
+execution:
+  mode: "local"
+  timeout: 3600
+  max_retries: 5
+  max_memory_mb: 12288
+  force_clean_venv: false  # Force clean virtual environment on startup (disabled when using existing venv)
+  use_system_python: false  # Set to true to use system Python instead of virtual environment
+  use_existing_venv: false  # Set to true to use an existing virtual environment (requires existing_venv_path)
+  existing_venv_path: ""  # Path to existing virtual environment (or use --venv CLI flag)
+  fail_on_max_retries: false  # If true, shutdown entire system when max_retries exceeded; if false, continue to next analysis
+  docker:
+    runtime: "auto"            # "auto" (try docker then podman), "docker", or "podman"
+    image: "python:3.10-slim"  # Default container image for sandbox execution
+    use_gpu: false             # Set true to pass host GPUs into the container (requires nvidia-container-runtime)
+    cache_dir: "~/.autointerp/docker_cache"  # Persistent cache for installed packages
+    extra_args: []             # Additional docker run arguments
+    env: []                    # Additional environment variables to pass through (e.g., ["CUSTOM_ENV"])
+
+# Visualization settings
+visualization:
+  use_agent: true             # Use CLI agent (claude/codex) for visualization; false = legacy pipeline
+  agent_timeout: 4200         # Subprocess timeout in seconds for visualization agent
+  default_format: "png"
+  dpi: 300
+  save_dir: "projects/{project_id}/visualizations"
+  attention_maps: true
+  attention_flow: true
+  neuron_activations: true
+  comparative_analysis: true
+
+# Reporting settings
+reporting:
+  default_format: "markdown"  # Options: markdown, jupyter, html, pdf
+  save_dir: "projects/{project_id}/reports"
+  use_agent: true             # Use CLI agent (claude/codex) for report generation; false = legacy pipeline
+  agent_timeout: 4200         # Subprocess timeout in seconds for agent report generation
+
+# AutoCritique settings — automated peer review after report generation
+autocritique:
+  enabled: true               # Run automated peer review after report generation
+  use_agent: true             # Use CLI agent (claude/codex) for autocritique
+  agent_timeout: 4200         # Subprocess timeout in seconds for autocritique agent
+  revision_timeout: 4200      # Per-recommendation timeout for revision agent (does analysis work)
+  report_revision_timeout: 4200  # Timeout for report revision agent (incorporates revisions into report)
+  max_revision_rounds: 2      # Max autocritique→revision→report revision cycles (0 = no revisions)
+
+# Repo assembly settings — assemble finalized files into a clean repo
+repo:
+  enabled: true               # Assemble finalized files into repo/ after pipeline completes
+  use_agent: true             # Use CLI agent (claude/codex) for repo assembly
+  agent_timeout: 4200         # Subprocess timeout in seconds for repo agent
+
+# Future Science submission settings
+future_science:
+  api_key: ""               # API key — can also be set via FUTURE_SCIENCE_API_KEY env var
+  initiative_id: ""         # documentId of the target initiative to submit to
+  contributor_email: ""     # Email of the submitting contributor
+  author_first_name: ""     # Default author first name (override in config.local.yaml; omit to use agent_name)
+  author_last_name: ""      # Default author last name (override in config.local.yaml; omit to use agent_name)
+  author_institution: ""    # Default author institution (override in config.local.yaml)
+  agent_name: "AutoInterp"  # AI agent name — used as author when author fields are empty
+  research_orchestrator: "" # Name of the human researcher who orchestrated the AI-assisted research
+  agent_description: "AutoInterp is an agent framework designed by Austin Kozlowski. This instance of AutoInterp ran {model}. More can be learned about AutoInterp at https://github.com/akozlo/AutoInterp"
+
+# Notebook generation settings — create executable Jupyter notebook from repo
+notebook:
+  enabled: true               # Generate Jupyter notebook after repo assembly
+  use_agent: true             # Use CLI agent (claude/codex) for notebook generation
+  agent_timeout: 4200         # Subprocess timeout in seconds for notebook agent
+
+# Computational resources
+resources:
+  max_gpu_memory: 8000  # MB
+  batch_size: 8
+  precision: "fp16"  # Options: fp32, fp16, bf16
+
+# Default paths
+paths:
+  data: "data"
+  models: "models"
+  projects: "projects"
+  create_missing: true
+  cleanup_old: false
+
+
+# Default output directories - all should use project-specific paths
+output_directories:
+  visualizations: "projects/{project_id}/visualizations"
+  reports: "projects/{project_id}/reports"
+  evaluation_results: "projects/{project_id}/evaluation_results"
+
+
+
+# UI settings
+ui:
+  rich_terminal: true        # Use Rich library for structured terminal output
+  html_dashboard: true       # Generate auto-refreshing HTML dashboard
+  dashboard_refresh: 5       # Dashboard auto-refresh interval in seconds
+  auto_open_browser: true    # Open dashboard in browser on pipeline start
+
+# Default LLM configuration
+llm:
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  temperature: 0.7
+  max_tokens: 3000
+  timeout: 180
+
+# Agent-specific configurations
+agents:
+  # Question Generation Agent
+  question_generator:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.8
+      max_tokens: 1000
+      timeout: 90
+
+  # Question Prioritization Agent
+  question_prioritizer:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.667
+      max_tokens: 1000
+      timeout: 180
+
+  # Analysis Planning Agent
+  analysis_planner:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.7
+      max_tokens: 3000
+      timeout: 180
+
+  # Analysis Generation Agent
+  analysis_generator:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.7
+      max_tokens: 12000
+      timeout: 180
+
+  # Visualization Planning Agent
+  visualization_planner:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.7
+      max_tokens: 3000
+      timeout: 180
+
+  # Visualization Generation Agent
+  visualization_generator:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.7
+      max_tokens: 12000
+      timeout: 180
+
+  # Analysis Evaluation Agent
+  evaluator:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.7
+      max_tokens: 31000
+      timeout: 180
+
+  # Visualization Evaluation Agent
+  visualization_evaluator:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.3
+      max_tokens: 2000
+      timeout: 180
+
+  # Report Generation Agent
+  reporter:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.7
+      max_tokens: 8000
+      timeout: 180
+
+  # Analysis Agent (CLI subprocess — claude or codex)
+  analysis_agent:
+    timeout: 4200
+
+  # Title Generation Agent
+  title_generator:
+    llm:
+      provider: "anthropic"
+      model: "claude-sonnet-4-6"
+      temperature: 0.7
+      max_tokens: 200
+      timeout: 60
+
+# Provider configurations are now dynamically applied at runtime
+# Use the interactive provider selection menu or set --config with overrides

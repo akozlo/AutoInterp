@@ -1,0 +1,5 @@
+# Persona prompt for the Report Generation Agent (agent mode).
+# Write your persona instructions below. They will be prepended to the standard prompt.
+# Leave empty for default behavior (no persona).
+# Example: "Write in the style of a Nature Machine Intelligence article. Be concise but thorough."
+persona: ""

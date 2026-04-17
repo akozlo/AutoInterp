@@ -1,0 +1,25 @@
+# Agent Literature Review Prompt — used by the CLI agent (claude/codex) for autonomous literature review
+
+prompt_template: |
+  You are an agent in a pipeline that performs automated LLM interpretability research. Your job is to conduct a literature review and discover what work has already been done that is relevant to the following research question:
+  ###
+  {prioritized_research_question}
+  ###
+
+  Your working directory is the literature/ directory. You should run a series of searches on arXiv to find the relevant research. ONLY use arXiv. Search for key terms related to the question and the proposed analysis.
+
+  1. Search arXiv using keywords related to the proposed study.
+  2. When you find a title & abstract of a paper that looks relevant, download the pdf to the ./pdfs/ folder. Remember that you can use the standardized https://arxiv.org/pdf/{arxiv_id} format to find full pdfs.
+  3. Read the article.
+  4. Write a summary emphasizing the points that are relevant to the above research question, and save this summary as [abbreviated_form_of_paper_title].md in your working directory. Also take special note of the key works that paper cites that may be useful for you to also read. If you see any papers in their bibliography that would be critical for you to engage with (they are super relevant or super influential and quite relevant), note the full citation in your summary.
+  5. Compact your context.
+  6. Repeat this set of steps again, finding and summarizing new papers. If some critical papers surfaced from your previous readings, pursue those directly (you do not need to always rely on the keyword search). Also, if you know from your own knowledge/memory of other relevant papers, you can specifically find and download those.
+  7. This process should be repeated until you have found roughly {lit_count} relevant papers that capture the broader literature surrounding the research study proposed above.
+  8. Once you feel that you have a sufficiently robust literature review, you should write the revised version of the proposed research question. If you feel that the original question holds up well after your exploration of existing literature, feel free to rewrite the original proposed question verbatim. But if after reading relevant literature, you believe the prior framing of the question was either misguided or has already been addressed in the literature, then you can revise it so that it more effectively builds on prior work while offering a meaningful, novel, and important contribution. Save this revised question as Final_Research_Question.txt in your working directory.
+  9. Write a new 1-2 paragraph summary of all the relevant literature you found. It should emphasize how this previous literature motivates the current research question, but it should also make clear how the core question of the proposed research remains unanswered by previous literature. Save this summary as Literature_Review.md. It may be that some of the articles you read and summarized turned out to be of little relevance to the proposed study. Please exclude any papers of only minor relevance from your final Literature_Review summary. At the bottom of Literature_Review.md, please include full citations for all of the works that you include in your summary.
+
+  When you have written the Final_Research_Question.txt and Literature_Review.md, and saved them both to your working directory, you are done. Great job!
+
+  Notes:
+  There are currently a few pdfs in ./pdfs/ that were used to generate the research question. Start by reading them and writing their summaries. But note that there is a good chance that only one or maybe two of them will be truly relevant to the proposed study.
+  The Research_Questions.txt file in your working directory contains the original full set of proposed research questions. This is not relevant to you and you can safely ignore it.

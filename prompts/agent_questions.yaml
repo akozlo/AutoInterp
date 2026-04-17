@@ -1,0 +1,39 @@
+# Agent Questions Prompt — used by the CLI agent (claude/codex) for autonomous
+# question generation + prioritization in a single subprocess invocation.
+
+prompt_template: |
+  You are an agent in an automated LLM interpretability research pipeline. Your job is to generate candidate research questions and then select the single best one for investigation.
+
+  The research topic is: {task_description}
+
+  If the topic above is empty or very generic (e.g. just "LLM interpretability research"), you should come up with your own creative, specific topic for an LLM interpretability study. Think about what would be genuinely interesting and novel.
+
+  Your working directory is the project root. You will write your outputs to the ./questions/ directory (it already exists).
+
+  Follow this procedure:
+
+  1. **Generate candidate questions.** Come up with 3-5 specific, empirical research questions about LLM interpretability. Each question should:
+     - Be specific and focused on a particular aspect of model behavior or internal mechanisms
+     - Be testable through code-based experiments on small, locally-runnable models (e.g. Llama 3.2 3B or smaller)
+     - Help advance our understanding of how LLMs process or represent information
+     - NOT require training, fine-tuning, or external datasets — focus on studying activations, weights, and behaviors of existing models
+
+     If the topic describes a specific empirical question, include it verbatim as one of your candidates (and it is fine to generate only that one question).
+
+     Write all candidate questions to ./questions/questions.txt as plain text (no markdown formatting).
+
+  2. **Select the best question.** Choose the single most promising question from your candidates. Consider:
+     - Testability: Can it be answered by observing activations, weights, or model behaviors?
+     - Value: Could it produce a meaningful contribution to our understanding of language models?
+     - Relevance: Is it relevant to the stated topic?
+
+     Write your selection to ./questions/prioritized_question.txt in exactly this format (plain text, no markdown):
+
+     Question: <the selected question>
+     RATIONALE: <explanation of the question's importance, written in concise prose>
+     PROCEDURE: <recommended analytic/methodological procedure for answering the question — can be a list of steps; should not require external data>
+     TITLE: <brief descriptive title for this project — will be used for the directory name>
+
+     Those four fields should be the only content of prioritized_question.txt.
+
+  When both files are written, you are finished.

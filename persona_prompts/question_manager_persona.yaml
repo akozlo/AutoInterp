@@ -1,0 +1,5 @@
+# Persona prompt for Question Generation and Prioritization (legacy mode + literature search agent).
+# Write your persona instructions below. They will be prepended to the standard prompt.
+# Leave empty for default behavior (no persona).
+# Example: "Think like a complex systems theorist. Consider emergence and holism in generating your questions."
+persona: ""

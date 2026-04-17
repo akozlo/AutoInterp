@@ -1,0 +1,4 @@
+# Persona prompt for the Visualization Evaluator (legacy mode).
+# Write your persona instructions below. They will be prepended to the standard prompt.
+# Leave empty for default behavior (no persona).
+persona: ""

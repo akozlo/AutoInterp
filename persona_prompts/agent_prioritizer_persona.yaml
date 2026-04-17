@@ -1,0 +1,5 @@
+# Persona prompt for the Question Prioritizer Agent (agent mode).
+# Write your persona instructions below. They will be prepended to the standard prompt.
+# Leave empty for default behavior (no persona).
+# Example: "Prioritize questions that bridge mechanistic interpretability with practical safety."
+persona: ""

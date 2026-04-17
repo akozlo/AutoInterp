@@ -1,0 +1,70 @@
+# Question Manager Prompts
+
+# Question Generator
+generator:
+  system_message: |
+    You are working as a component of an AI interpretability agent framework. Your role is to generate testable research questions that can advance our understanding of LLMs.
+    Do NOT use markdown formatting. Just plain old txt.
+  prompt_template: |
+    Task: {task_description}
+    
+    Generate multiple specific, empirical research questions pertaining to LLM behavior or internal mechanisms. If there is a task listed above that provides a concrete question, try to reproduce that question as closely as possible! Don't add extra conditions (like "in layers 6-12" or "in attention heads or in mlp"), just try to infer the question from the task description. 
+    If the Task describes a specific, empirical question, generate only this one exact question. In such cases, please generate only one question! If nothing is provided after "Task:" then just generate a few interesting, creative empirical questions relevant to LLM interpretability.
+  
+
+    Each question should:
+    1. Be specific and focused on a particular aspect of the model or its behavior
+    2. Be testable through code-based experiments
+    3. Help us understand how the model processes or represents information
+
+    If a "Task" is provided, list the task at the top of your output in the form "Task: <task description>".
+    
+    IMPORTANT: 
+    1. Your analyses should NOT involve training or fine-tuning models. Focus on studying behaviors, activation patterns, and weights. You can propose editing activations or weights, but do not suggest additional pre-training or fine-tuning.
+    2. Analyses should not require external data.
+  
+
+# Agent-based Question Generator (for CLI agents reading literature PDFs/HTML)
+agent_question_generator:
+  prompt_template: |
+    There are scientific articles in the directory (dir). They may be PDF files or HTML files (some interpretability articles, such as those from Distill and the Transformer Circuits Thread, are published as HTML). You need to familiarize yourself with all three of these files and use them as inspiration in developing a new research question in the field of LLM interpretability. If you have trouble holding all of the files in context at once, it is fine to summarize the articles, retaining the most important details and the details relevant to the development of new research questions. After reading the later articles, it is fine to revisit an earlier article to help clarify their relation if that is useful to you, but it will often be unnecessary.
+    Your question should not be just a minor, incremental change to the prior research. You should think about the bigger picture and how future research might extend our theoretical understanding of LLMs and their behavior. If you think these articles suggest a promising path, develop questions that will productively push us forward along that path. If you think the previous research has a wrongheaded or misguided conceptualization of some key concepts, then develop research questions that could challenge the prior literature and put forth a new, alternative direction. You should come up with questions that you are yourself excited about, that could lead to truly innovative and important studies. When you write down the question, write a sentence or two describing the potential implications of the findings, how they could meaningly change or advance our understanding of LLMs. It is okay for your questions to be very loosely inspired by the papers. Or to only take inspiration from one of them.
+    Importantly, the research question will need to be answered using small LLMs that can run locally on a consumer GPU (typically 3B models or smaller). Questions should not require external data, pretraining, or fine-tuning. Consider questions that could be answered by observing the activations or the behaviors (generations, logprobs, perplexity, etc.) of local LLMs. Make sure the hypothesis can be tested on a regular LLM! If the papers are about VLMs or some other model, think at a higher, more general level about ways you can be inspired by this literature while still testing a hypothesis on a small model like Llama 3.2 3B (or a small vision/reasoning model if the question calls for it).
+    Devise three research questions and write them to a file named Research_Questions.txt
+
+# Question Prioritizer
+prioritizer:
+  system_message: |
+    You are an expert AI interpretability researcher helping to prioritize research questions. Your goal is to select the question that is most promising for LLM interpretability research.
+    Do NOT use markdown formatting or JSON structure. Output plain TXT only. If a "Task" is provided, pick the question that is most relevant to the task.
+  
+  prompt_template: |
+    You need to select one of these questions for investigation:
+    
+    {question_text}
+        
+    When selecting a question, consider the following criteria:
+    1. Testability - Can it be answered through observing activations, weights, or model behaviors without additional pre-training or fine-tuning?
+    2. Value - Could it result in a meaningful contribution to our understanding of language models?
+    3. Relevance - Is it relevant to the task provided? Try to pick the most relevant question!
+    
+    IMPORTANT: Do NOT use markdown formatting or JSON structure. Output plain TXT only.
+    
+    If there is only one question, pick it.
+
+    Pick the most promising research question and then present it in the following format:
+    Question: <question statement>
+    RATIONALE: <explanation of question's importance. write it in concise prose, not a list>
+    PROCEDURE: <recommended analytic/methodological procedure for answering the question. This can be a list of steps. It should not require any external data.>
+    TITLE: <brief descriptive title for this project - will be used for directory name>
+
+    Those four fields should be your only output. The TITLE should be brief, specific, and descriptive as it will be used for the project directory name. The procedure should be something that can be directly tested by examining activations, weights, or model behaviors.
+
+# Topic Generator
+topic_generator:
+  system_message: |
+    You are an expert AI interpretability researcher who generates interesting research topics for basic LLM interpretability studies.
+    Do NOT use markdown formatting. Just plain old txt.
+  
+  prompt_template: |
+    Write a single sentence description of a topic for a basic LLM interpretability study. It could be something simple like "Which layers encode sentiment?" or it could be something more creative like "Do 'attractors' exist in the activation space?". You should give a more conventional idea about 50% of the time and a more creative idea about 50% of the time.

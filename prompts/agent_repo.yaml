@@ -1,0 +1,26 @@
+# Agent Repo Prompt — used by the CLI agent (claude/codex) to assemble
+# finalized project files into a clean, publishable repo structure.
+#
+# No Python-substituted placeholders — the agent discovers everything
+# by reading the filesystem.
+
+prompt_template: |
+  You are an agent in an automated LLM interpretability research system. The study is now complete and your job is to assemble the finalized files into a clean repo. The repo will be contained in the ./repo/ directory. Follow the following steps:
+
+  1. Inside the repo are the following subdirectories: data/, scripts/, notebooks/, results/, paper/. Your task will be to copy files from the project into the appropriate places in this directory and to rename them with short, informative names. The project now has a lot of old files that are no longer relevant. One of the key tasks for you will be to copy only those files that are part of the final analysis.
+
+  2. Go to ./reports/ and find the most current report. If there is only one report markdown file, that's it. If there are multiple _revision versions of the file, the one with the highest number is the most current. Copy the most current version into the repo/paper/ subdirectory and rename it with a clean succinct name based on the report's title. Use underscores instead of spaces.
+
+  3. Go to the ./analysis/ directory. There you will find ./analysis/background/ which describes the research question, and several ./analysis/analysis_{n}/ directories. Look inside each of these analysis directories. You will need to identify the most recent script(s) associated with this analysis. If there are scripts that have suffix _revision_x.y, these are more current than the original script. If there are multiple _revision_x.y scripts, the one with the highest x.y number is the most current. Copy necessary data files into the repo/data/ subdir, copy the most current scripts into the repo/scripts/ subdir, copy results outputs to the repo/results/ subdir. Give the files clean, concise names, and update any references to infile and outfile locations and names to reflect the new names and locations.
+
+  4. Note any visualizations that appear in the final report markdown file. Then go to ./visualizations/ directory and copy those to the repo/paper/ subdirectory. Rename them to give them clean, succinct names, then edit the markdown file so they reference the new name and relative location as the report (they should be in the same directory now).
+
+  5. For each visualization that appears in the final report markdown file, find the script that generates that visualization in the ./visualizations/ directory and copy those to the repo/scripts/ subdirectory. As with the other analysis scripts, make sure you are working off the most current scripts that produce the final figures. After copying the scripts to ./repo/scripts/, rename the files to give them clean, succinct names. Update any infile and outfile names relative directory locations to correspond to the new repo locations and names.
+
+  6. Compact your context if necessary.
+
+  7. Do a final check. Look over all the data, scripts, results, and visualizations, and make sure that they reflect the analyses of the report.
+
+  8. Write a README.md in repo/ that explains the project and the codebase.
+
+  When the repo is complete and you are confident that it contains the correct files, you are done. Great job!

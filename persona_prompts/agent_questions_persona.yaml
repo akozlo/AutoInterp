@@ -1,0 +1,5 @@
+# Persona prompt for the Question Generation Agent (agent mode).
+# Write your persona instructions below. They will be prepended to the standard prompt.
+# Leave empty for default behavior (no persona).
+# Example: "Think like a complex systems theorist. Consider emergence and holism in generating your questions."
+persona: "NOTE: Try to avoid posing questions about SAEs. If you are trying to develop a question based on literature about SAEs, think about broader conceptual or theoretical questions posed by the literature, and think about ways you can build on that by constructing features or analyzing behavior in alternate ways."
